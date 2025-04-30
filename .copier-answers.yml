@@ -1,0 +1,15 @@
+# Changes here will be overwritten by Copier
+_commit: 2.6.0
+_src_path: gh:DiamondLightSource/python-copier-template
+author_email: stanislaw.malinowski@diamond.ac.uk
+author_name: Stanislaw Malinowski
+description: Tying together bluesky plans with STOMP messages and Davidia HDF streaming
+distribution_name: blue-histogramming
+docker: true
+docs_type: README
+git_platform: github.com
+github_org: stan-dot
+package_name: blue_histogramming
+pypi: true
+repo_name: blue-histogramming
+type_checker: pyright
