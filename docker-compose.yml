@@ -1,0 +1,46 @@
+services:
+  blue-h11g:
+    volumes:
+      - ..:/workspaces:z
+    build:
+      context: .
+    command: []
+    environment:
+      NODE_ENV: development
+    ports:
+      - 8000:8000
+    depends_on:
+      - dragonfly
+      # - rmq
+    network_mode: service:dragonfly
+  # rmq:
+  #   image: 'docker.io/bitnami/rabbitmq:4.1.0-debian-12-r0'
+  #   ports:
+  #     - 5672:5672
+  #     - 15672:15672
+  #   environment:
+  #     RABBITMQ_DEFAULT_USER: user
+  #     RABBITMQ_DEFAULT_PASS: password
+  #     RABBITMQ_DEFAULT_VHOST: /
+  #   volumes:
+  #     - rabbitmqdata:/bitnami/rabbitmq
+  dragonfly:
+    image: 'docker.dragonflydb.io/dragonflydb/dragonfly'
+    ulimits:
+      memlock: -1
+    ports:
+      - 6379:6379
+    # For better performance, consider `host` mode instead `port` to avoid docker NAT.
+    # `host` mode is NOT currently supported in Swarm Mode.
+    # https://docs.docker.com/compose/compose-file/compose-file-v3/#network_mode
+    # network_mode: "host"
+    volumes:
+      - dragonflydata:/data
+volumes:
+  dragonflydata:
+  # rabbitmqdata:
+  #   driver: local
+  #   driver_opts:
+  #     type: none
+  #     device: /tmp/rabbitmqdata
+  #     o: bind

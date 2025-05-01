@@ -9,7 +9,14 @@ __all__ = ["main"]
 
 
 def main(args: Sequence[str] | None = None) -> None:
+    print(f"ARGS: {args}")
     """Argument parser for the CLI."""
+    print(
+        "blue_histogramming is a package for histogramming data in Python.\n"
+        "For more information, please visit"
+    )
+    while True:
+        print("keep going")
     parser = ArgumentParser()
     parser.add_argument(
         "-v",
