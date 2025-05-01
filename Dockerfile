@@ -1,6 +1,6 @@
 # The devcontainer should use the developer target and run as root with podman
 # or docker with user namespaces.
-ARG PYTHON_VERSION=3.11
+ARG PYTHON_VERSION=3.12
 FROM python:${PYTHON_VERSION} AS developer
 
 # Add any system dependencies for the developer/build environment here
@@ -24,6 +24,12 @@ FROM python:${PYTHON_VERSION}-slim AS runtime
 COPY --from=build /venv/ /venv/
 ENV PATH=/venv/bin:$PATH
 
+# CMD ["tail", "-f", "/dev/null"]
+
+# ENTRYPOINT ["/venv/bin/python"]
 # change this entrypoint if it is not the same as the repo
-ENTRYPOINT ["blue-histogramming"]
-CMD ["--version"]
+# ENTRYPOINT ["blue-histogramming"]
+# CMD ["--version"]
+ENTRYPOINT ["/venv/bin/python", "-m", "blue_histogramming"]
+# CMD ["--version"]
+
