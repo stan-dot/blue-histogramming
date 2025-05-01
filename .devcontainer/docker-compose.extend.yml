@@ -16,6 +16,9 @@ services:
     # command: tail -f /dev/null
     # command: null
     # command: ["--version"]
-    command: ["tail", "-f", "/dev/null"]
+    # entrypoint: sleep
+    entrypoint: ["sleep", "infinity"]
+    # command: ["sleep", "10000"]
+    # command: ["tail", "-f", "/dev/null"]
 
 
