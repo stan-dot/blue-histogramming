@@ -7,6 +7,8 @@
 
 Tying together bluesky plans with STOMP messages and Davidia HDF streaming
 
+`mkdir /tmp/rabbitmqdata` for the devcontainer to work ok.
+
 This is where you should write a short paragraph that describes what your module does,
 how it does it, and why people should use it.
 
