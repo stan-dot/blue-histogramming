@@ -32,7 +32,8 @@
     ],
     // Allow the container to access the host X11 display and EPICS CA
     // "--net=host",
-    "initializeCommand": "bash -c 'for i in $HOME/.inputrc; do [ -f $i ] || touch $i; done'; mkdir /tmp/rabbbitmqdata",
+    // "initializeCommand": "bash -c 'for i in $HOME/.inputrc; do [ -f $i ] || touch $i; done'; mkdir /tmp/rabbbitmqdata",
+    "initializeCommand": "bash -c 'for i in $HOME/.inputrc; do [ -f $i ] || touch $i; done';",
     "mounts": [
         "source=${localEnv:HOME}/.ssh,target=/root/.ssh,type=bind",
         "source=${localEnv:HOME}/.inputrc,target=/root/.inputrc,type=bind"

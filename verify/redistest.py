@@ -1,7 +1,7 @@
 import redis
 
 
-def check_redis_connection(host="localhost", port=6379, db=0):
+def check_redis_connection(host="dragonfly", port=6379, db=0):
     try:
         r = redis.Redis(host=host, port=port, db=db)
         r.ping()
