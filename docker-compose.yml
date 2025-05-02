@@ -28,6 +28,8 @@ services:
       RABBITMQ_ENABLED_PLUGINS: "rabbitmq_management rabbitmq_stomp"
     volumes:
       - rabbitmqdata:/bitnami/rabbitmq
+      - ./rmq/rabbitmq.conf:/opt/bitnami/rabbitmq/etc/rabbitmq/rabbitmq.conf:ro
+      - ./rmq/enabled_plugins:/opt/bitnami/rabbitmq/etc/rabbitmq/enabled_plugins:ro
   dragonfly:
     image: 'docker.dragonflydb.io/dragonflydb/dragonfly'
     ulimits:
