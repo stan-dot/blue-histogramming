@@ -17,15 +17,13 @@
                 "python.defaultInterpreterPath": "/venv/bin/python"
             },
             "extensions": [
-                "streetsidesoftware.code-spell-checker",
                 "dbaeumer.vscode-eslint",
                 "ms-python.python",
                 "github.vscode-github-actions",
                 "tamasfe.even-better-toml",
                 "redhat.vscode-yaml",
                 "ryanluker.vscode-coverage-gutters",
-                "charliermarsh.ruff",
-                "ms-azuretools.vscode-docker"
+                "charliermarsh.ruff"
             ]
         }
     },
@@ -34,10 +32,9 @@
     ],
     // Allow the container to access the host X11 display and EPICS CA
     // "--net=host",
-    "initializeCommand": "bash -c 'for i in $HOME/.inputrc; do [ -f $i ] || touch $i; done'",
+    "initializeCommand": "bash -c 'for i in $HOME/.inputrc; do [ -f $i ] || touch $i; done'; mkdir /tmp/rabbbitmqdata",
     "mounts": [
         "source=${localEnv:HOME}/.ssh,target=/root/.ssh,type=bind",
         "source=${localEnv:HOME}/.inputrc,target=/root/.inputrc,type=bind"
     ]
-    // "postCreateCommand": "bash -i scripts/install-dependencies.sh"
 }
