@@ -12,7 +12,23 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 description = "Tying together bluesky plans with STOMP messages and Davidia HDF streaming"
-dependencies = [] # Add project dependencies here, e.g. ["click", "numpy"]
+dependencies = [
+
+
+    "asyncio",
+    "click",
+    "fastapi",
+    "h5py",
+    "jsonschema",
+    "ophyd-async",
+    "pydantic",
+    "pydantic-settings",
+    "uvicorn",
+    "redis",
+    "requests",
+
+
+]
 dynamic = ["version"]
 license.file = "LICENSE"
 readme = "README.md"
@@ -21,6 +37,7 @@ requires-python = ">=3.10"
 [project.optional-dependencies]
 dev = [
     "copier",
+    "pika",
     "pipdeptree",
     "pre-commit",
     "pyright",
@@ -47,7 +64,7 @@ version_file = "src/blue_histogramming/_version.py"
 
 [tool.pyright]
 typeCheckingMode = "standard"
-reportMissingImports = false # Ignore missing stubs in imported modules
+reportMissingImports = false  # Ignore missing stubs in imported modules
 
 [tool.pytest.ini_options]
 # Run pytest with all our checkers, and don't spam us with massive tracebacks on error
