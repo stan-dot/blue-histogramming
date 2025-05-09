@@ -18,7 +18,7 @@ class STOMPListener(stomp.ConnectionListener):
 
 
 def start_stomp_connection():
-    conn = stomp.Connection([("localhost", 5672)])
+    conn = stomp.Connection([("rmq", 61613)], auto_content_length=False)
     conn.set_listener("", STOMPListener())
     # conn.connect("user", "password", wait=True)
     conn.connect("user", "password", wait=True)
