@@ -51,5 +51,5 @@ volumes:
     driver: local
     driver_opts:
       type: none
-      device: /tmp/rabbitmqdata
+      device: /tmp/rabbitmqdata # NOTE on WSL might need to `chmod -R 0777` this dir so that rmq can write its config
       o: bind
