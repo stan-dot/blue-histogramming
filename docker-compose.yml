@@ -28,7 +28,7 @@ services:
       RABBITMQ_USERNAME: user2
       RABBITMQ_PASSWORD: password
       RABBITMQ_DEFAULT_VHOST: /
-      RABBITMQ_ENABLED_PLUGINS: rabbitmq_management,rabbitmq_stomp,rabbitmq_jms_topic_exchange
+      RABBITMQ_ENABLED_PLUGINS: rabbitmq_management,rabbitmq_stomp,rabbitmq_jms_topic_exchange # formatting from here https://gitlab.diamond.ac.uk/daq/tools/rabbitmq-for-dummy/-/blob/main/values.yaml?ref_type=heads
     volumes:
       - rabbitmqdata:/bitnami/rabbitmq
       # - ./rmq/rabbitmq.conf:/opt/bitnami/rabbitmq/etc/rabbitmq/rabbitmq.conf:ro
