@@ -2,7 +2,7 @@ import pika
 
 
 def check_rabbitmq_connection(
-    host="rmq", port=5672, username="user2", password="password"
+    host="rmq", port=5672, username="user", password="password"
 ):
     try:
         credentials = pika.PlainCredentials(username, password)
