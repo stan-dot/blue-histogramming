@@ -1,0 +1,38 @@
+podman-compose version: 1.0.6
+['podman', '--version', '']
+using podman version: 4.9.3
+** excluding:  {'blue-h11g', 'dragonfly'}
+['podman', 'ps', '--filter', 'label=io.podman.compose.project=blue-histogramming', '-a', '--format', '{{ index .Labels "io.podman.compose.config-hash"}}']
+recreating: ...
+** excluding:  {'blue-h11g', 'dragonfly'}
+podman stop -t 10 blue-histogramming_rmq_1
+blue-histogramming_rmq_1
+exit code: 0
+podman rm blue-histogramming_rmq_1
+blue-histogramming_rmq_1
+exit code: 0
+recreating: done
+
+
+podman volume inspect blue-histogramming_rabbitmqdata || podman volume create blue-histogramming_rabbitmqdata
+['podman', 'volume', 'inspect', 'blue-histogramming_rabbitmqdata']
+['podman', 'network', 'exists', 'blue-histogramming_default']
+podman create --name=blue-histogramming_rmq_1 --security-opt label=disable --label io.podman.compose.config-hash=e36f829b701671b83969efb81ea89a01bfe79d2c58597c2f9f987ec7029011c1 --label io.podman.compose.project=blue-histogramming --label io.podman.compose.version=1.0.6 --label PODMAN_SYSTEMD_UNIT=podman-compose@blue-histogramming.service --label com.docker.compose.project=blue-histogramming --label com.docker.compose.project.working_dir=/home/stan-dot/forks/blue-histogramming --label com.docker.compose.project.config_files=docker-compose.yml --label com.docker.compose.container-number=1 --label com.docker.compose.service=rmq -e RABBITMQ_DEFAULT_USER=user -e RABBITMQ_DEFAULT_PASS=password -e RABBITMQ_USERNAME=user2 -e RABBITMQ_PASSWORD=password -e RABBITMQ_DEFAULT_VHOST=/ -e RABBITMQ_ENABLED_PLUGINS=rabbitmq_management rabbitmq_stomp -v blue-histogramming_rabbitmqdata:/bitnami/rabbitmq --net blue-histogramming_default --network-alias rmq -p 5672:5672 -p 15672:15672 -p 61613:61613 docker.io/bitnami/rabbitmq:4.1.0-debian-12-r0
+4d1cb869c927ee8f75f715e11eb848bc93bc166db3139adcfdb5132915763169
+exit code: 0
+** skipping:  blue-histogramming_dragonfly_1
+** skipping:  blue-histogramming_blue-h11g_1
+podman start -a blue-histogramming_rmq_1
+[38;5;6mrabbitmq [38;5;5m12:29:03.07 [0m[38;5;2mINFO [0m ==> 
+[38;5;6mrabbitmq [38;5;5m12:29:03.07 [0m[38;5;2mINFO [0m ==> [1mWelcome to the Bitnami rabbitmq container[0m
+[38;5;6mrabbitmq [38;5;5m12:29:03.07 [0m[38;5;2mINFO [0m ==> Subscribe to project updates by watching [1mhttps://github.com/bitnami/containers[0m
+[38;5;6mrabbitmq [38;5;5m12:29:03.07 [0m[38;5;2mINFO [0m ==> Did you know there are enterprise versions of the Bitnami catalog? For enhanced secure software supply chain features, unlimited pulls from Docker, LTS support, or application customization, see Bitnami Premium or Tanzu Application Catalog. See https://www.arrow.com/globalecs/na/vendors/bitnami/ for more information.
+[38;5;6mrabbitmq [38;5;5m12:29:03.07 [0m[38;5;2mINFO [0m ==> 
+[38;5;6mrabbitmq [38;5;5m12:29:03.08 [0m[38;5;2mINFO [0m ==> ** Starting RabbitMQ setup **
+[38;5;6mrabbitmq [38;5;5m12:29:03.09 [0m[38;5;2mINFO [0m ==> Validating settings in RABBITMQ_* env vars..
+[38;5;6mrabbitmq [38;5;5m12:29:03.10 [0m[38;5;2mINFO [0m ==> Initializing RabbitMQ...
+[38;5;6mrabbitmq [38;5;5m12:29:03.11 [0m[38;5;2mINFO [0m ==> Generating random cookie
+mkdir: cannot create directory ‘/bitnami/rabbitmq/mnesia’: Permission denied
+** skipping:  blue-histogramming_dragonfly_1
+** skipping:  blue-histogramming_blue-h11g_1
+exit code: 1
