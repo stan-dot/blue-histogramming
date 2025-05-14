@@ -4,7 +4,7 @@ from pathlib import Path
 
 import stomp
 
-CHANNEL = "/topic/public.worker.event"
+CHANNEL = "/queue/test"
 
 
 class STOMPListener(stomp.PrintingListener):

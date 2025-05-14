@@ -20,10 +20,10 @@ class STOMPListener(stomp.ConnectionListener):
 
 
 def start_stomp_listener():
-    conn = stomp.Connection([("localhost", 5672)])
+    conn = stomp.Connection([("rmq",61636)])
     conn.set_listener("", STOMPListener())
-    # conn.connect("user", "password", wait=True)
-    conn.connect(wait=True)
+    conn.connect("user", "password", wait=True)
+    # conn.connect(wait=True)
     conn.subscribe(destination="/queue/test", id=1, ack="auto")
 
 
