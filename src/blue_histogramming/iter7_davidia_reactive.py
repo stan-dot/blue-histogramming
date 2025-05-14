@@ -120,7 +120,8 @@ class STOMPListener(stomp.ConnectionListener):
 
 
 def start_stomp_listener():
-    conn = stomp.Connection([("localhost", 5672)])
+    conn = stomp.Connection([("rmq", 61613)])
+    print("Connecting to STOMP broker...")
     conn.set_listener("", STOMPListener())
     try:
         conn.connect("user", "password", wait=True)
@@ -128,6 +129,7 @@ def start_stomp_listener():
         print(f"Error: {e}")
         exit(1)
     # todo adapt the correct topic, maybe from env vars
+    print("trying to subscribe to topic")
     conn.subscribe(destination="/queue/test", id=1, ack="auto")
 
 
