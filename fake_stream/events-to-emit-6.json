@@ -97,7 +97,7 @@
                 "uid": "7d16802b-a492-4f0b-a7ca-ba167d635837",
                 "data_key": "manta",
                 "mimetype": "application/x-hdf5",
-                "uri": "file://localhost/dls/b01-1/data/2025/cm40661-1/c01-6-manta.h5",
+                "uri": "file://localhost/tmp/hdfdata/c01-6-manta.h5",
                 "parameters": {
                     "dataset": "/entry/data/data",
                     "swmr": false,
