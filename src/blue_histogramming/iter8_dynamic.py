@@ -57,52 +57,27 @@ def process_image_direct(image: np.ndarray) -> ImageStats:
     return ImageStats(r=r_sum, g=g_sum, b=b_sum, total=r_sum + g_sum + b_sum)
 
 
-def calculate_fractions(
-    stats_list: list[ImageStats],
-) -> list[ImageStats]:
-    # Extract all r, g, b, t values from the stats_list
-    r_values = [stat.r for stat in stats_list]
-    g_values = [stat.g for stat in stats_list]
-    b_values = [stat.b for stat in stats_list]
-    t_values = [stat.total for stat in stats_list]
+def calculate_fractions(stats_list: list[ImageStats]) -> list[ImageStats]:
+    # Convert list of ImageStats to a numpy array
+    stats_array = np.array(
+        [[stat.r, stat.g, stat.b, stat.total] for stat in stats_list], dtype=np.float64
+    )
 
-    print(r_values, g_values, b_values, t_values)
-    # Find min and max for each of the properties (r, g, b, t)
-    r_min, r_max = min(map(int, r_values)), max(map(int, r_values))
-    g_min, g_max = min(map(int, g_values)), max(map(int, g_values))
-    b_min, b_max = min(map(int, b_values)), max(map(int, b_values))
-    t_min, t_max = min(map(int, t_values)), max(map(int, t_values))
+    # Calculate min and max for each column (r, g, b, total)
+    mins = stats_array.min(axis=0)
+    maxs = stats_array.max(axis=0)
 
-    # If any property min == max, fractions for that property will be 0
-    if r_min == r_max:
-        r_fractions = [0] * len(stats_list)
-    else:
-        r_fractions = [(stat.r - r_min) / (r_max - r_min) for stat in stats_list]
+    # Handle zero division for columns with constant values
+    ranges = np.where(maxs - mins == 0, 1, maxs - mins)
 
-    if g_min == g_max:
-        g_fractions = [0] * len(stats_list)
-    else:
-        g_fractions = [(stat.g - g_min) / (g_max - g_min) for stat in stats_list]
+    # Normalize
+    fractions_array = (stats_array - mins) / ranges
 
-    if b_min == b_max:
-        b_fractions = [0] * len(stats_list)
-    else:
-        b_fractions = [(stat.b - b_min) / (b_max - b_min) for stat in stats_list]
-
-    if t_min == t_max:
-        t_fractions = [0] * len(stats_list)
-    else:
-        t_fractions = [(stat.total - t_min) / (t_max - t_min) for stat in stats_list]
-
-    fractions = [
-        ImageStats(
-            r=r_fractions[i], g=g_fractions[i], b=b_fractions[i], total=t_fractions[i]
-        )
-        for i in range(len(stats_list))
+    # Convert back to list of ImageStats
+    return [
+        ImageStats(r=frac[0], g=frac[1], b=frac[2], total=frac[3])
+        for frac in fractions_array
     ]
-
-    print(fractions)
-    return fractions
 
 
 def get_dtos_from_dataset(
