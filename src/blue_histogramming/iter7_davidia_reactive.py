@@ -1,3 +1,4 @@
+import asyncio
 import json
 from logging import debug
 from pathlib import Path
@@ -14,6 +15,9 @@ from event_model import EventDescriptor, RunStart, StreamDatum, StreamResource
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.websockets import WebSocket
 from pydantic import BaseModel
+
+# todo read the topic from env vars to suit many deployments
+STOP_TOPIC = "/queue/test"
 
 
 def uri_to_path(uri: str) -> Path:
@@ -51,7 +55,7 @@ state = {
     "filepath": "",
 }
 
-active_websockets = set()
+active_websockets: set[WebSocket] = set()
 
 
 descriptors: set[str] = set()
@@ -118,8 +122,11 @@ class RunInstance(BaseModel):
     path: Path
     start: RunStart
     descriptor: EventDescriptor
-    resource: StreamResource
+    resource: StreamResource | None
     current_max_index: int = 0
+    group_structure: dict[str, Any] | None = None
+    dataset: h5py.Dataset | None = None
+    # todo make something smarter than keeping 140MB in memory
 
 
 this_instance = RunInstance(
@@ -131,8 +138,7 @@ this_instance = RunInstance(
         data_keys={},
         run_start="example_run_start_uid",
     ),
-    resource=null,
-    # todo consider better the global state management
+    resource=None,
 )
 
 
@@ -145,11 +151,10 @@ class STOMPListener(stomp.ConnectionListener):
         message = frame.body
         print(f"Message: {message}")
         message = json.loads(message)
-        if message["name"] == "descritptor":
+        if message["name"] == "descriptor":
             descriptor = EventDescriptor(message["doc"])
             print(f"Descriptor: {descriptor}")
             this_instance.descriptor = descriptor
-            # todo check if the descriptor is already in the list
             descriptors.add(descriptor["uid"])
 
         if message["name"] == "stream_resource":
@@ -161,25 +166,15 @@ class STOMPListener(stomp.ConnectionListener):
 
             structures = list_hdf5_tree_of_file(file)
             debug(f"Structures: {structures}")
+            this_instance.group_structure = structures
 
             dataset_path = resource["parameters"]["dataset"]
             dataset = file[dataset_path]
-            # todo what exactly to do with the dataset? when to send? should cache the whole thing in memory?
 
             if not isinstance(dataset, h5py.Dataset):
                 print("Error: 'data' is not a dataset.")
                 return
-
-            image_data = tranform_dataset_into_dto(dataset)
-            print(f"Image Data: {image_data}")
-
-            # Send to WebSocket clients
-            packed = ws_pack(image_data)
-            print(f"Packed: {packed}")
-
-            # todo change from this manual setup so that the davidia app will send the item
-            for websocket in active_websockets:
-                websocket.send_text(packed)
+            this_instance.dataset = dataset
 
         if message["name"] == "stream_datum":
             if message["doc"]["uid"] not in descriptors:
@@ -192,6 +187,28 @@ class STOMPListener(stomp.ConnectionListener):
             ]  # here we know that it is only one step
             stop = specific_slice["indices"]["stop"]
             # todo here we expand how much from the dataset we can read
+            # todo should we relay on the swmr mode or the notifications?
+            # todo here need to do the histogramming logic on the data extracted like in the previous iterations
+            return self._forward_slice_to_websockets(start, stop)
+
+    def _forward_slice_to_websockets(self, start, stop):
+        if this_instance.dataset is None:
+            print("Error: No dataset found.")
+            return
+        image_data = tranform_dataset_into_dto(this_instance.dataset[start:stop])
+        # todo are images that indexable?
+        print(f"Image Data: {image_data}")
+
+        # Send to WebSocket clients
+        packed = ws_pack(image_data)
+        print(f"Packed: {packed}")
+
+        if packed is None:
+            print("Packed is None")
+            return
+            # todo maybe change from sending here to davidia sending this
+        for websocket in active_websockets:
+            asyncio.run(websocket.send_bytes(packed))
 
 
 def start_stomp_listener():
@@ -203,9 +220,8 @@ def start_stomp_listener():
     except Exception as e:
         print(f"Error: {e}")
         exit(1)
-    # todo read the topic from env vars to suit many deployments
-    print("trying to subscribe to topic")
-    conn.subscribe(destination="/queue/test", id=1, ack="auto")
+    print(f"trying to subscribe to topic, {STOP_TOPIC}")
+    conn.subscribe(destination=STOP_TOPIC, id=1, ack="auto")
 
 
 if __name__ == "__main__":
