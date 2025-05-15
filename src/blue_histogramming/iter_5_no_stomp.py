@@ -35,10 +35,10 @@ def calculate_fractions(
 
     print(r_values, g_values, b_values, t_values)
     # Find min and max for each of the properties (r, g, b, t)
-    r_min, r_max = min(r_values), max(r_values)
-    g_min, g_max = min(g_values), max(g_values)
-    b_min, b_max = min(b_values), max(b_values)
-    t_min, t_max = min(t_values), max(t_values)
+    r_min, r_max = min(map(int, r_values)), max(map(int, r_values))
+    g_min, g_max = min(map(int, g_values)), max(map(int, g_values))
+    b_min, b_max = min(map(int, b_values)), max(map(int, b_values))
+    t_min, t_max = min(map(int, t_values)), max(map(int, t_values))
 
     # If any property min == max, fractions for that property will be 0
     if r_min == r_max:
@@ -271,7 +271,7 @@ def read_dataset(latest_n_reads: int):
         print(f"stats list: {stats_list}")
         fractions_list = calculate_fractions(stats_list)
         print(f"nice fractions: {fractions_list}")
-        final_list = [ImageStatsDTO.from_array(a) for a in fractions_list]
+        final_list = [ImageStatsDTO.from_array(list(a)) for a in fractions_list]
         print(f"final list: {final_list}")
 
         print(f"stats: {stats_list}")
@@ -359,6 +359,26 @@ def process_image(image: np.ndarray) -> ImageStats:
 
     # Return results as a dataclass
     return ImageStats(r=r_sum, g=g_sum, b=b_sum, total=r_sum + g_sum + b_sum)
+
+
+def process_image_direct(image: np.ndarray) -> ImageStatsDTO:
+    """
+    Divide the image into 3 parts, compute sums for each part, and store in a dataclass.
+    """
+    # print(f"processing image: {image}")
+    # print(f"shape: {image.shape}")
+    h, _ = image.shape[0], image.shape[1]  # Get height and width of each 2D slice
+
+    segment_height = h // 3
+    # print(f"h and segment h: {h}, {segment_height}")
+
+    # Divide image into three parts along the height dimension
+    r_sum = np.sum(image[:, :segment_height])
+    g_sum = np.sum(image[:, segment_height : 2 * segment_height])
+    b_sum = np.sum(image[:, 2 * segment_height :])
+
+    # Return results as a dataclass
+    return ImageStatsDTO(r=r_sum, g=g_sum, b=b_sum, total=r_sum + g_sum + b_sum)
 
 
 def start_notifier_loop():

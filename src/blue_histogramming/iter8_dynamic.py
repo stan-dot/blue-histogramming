@@ -1,6 +1,13 @@
+"""
+overall plan.
+1. listen to stomp messages
+2. parse the messages to get file path
+3. from filepath parse data into davidia classes (ImageStats?)
+4. let Davidia send that data over websocket to the client
+"""
+
 import asyncio
 import json
-from dataclasses import dataclass
 from logging import debug
 from pathlib import Path
 from typing import Any
@@ -23,13 +30,14 @@ STOP_TOPIC = "/queue/test"
 
 
 # ✅ Pydantic model for API response (converts np.uint64 to int)
-class ImageStatsDTO(BaseModel):
+class ImageStats(BaseModel):
     r: float
     g: float
     b: float
     total: float
 
-def process_image_direct(image: np.ndarray) -> ImageStatsDTO:
+
+def process_image_direct(image: np.ndarray) -> ImageStats:
     """
     Divide the image into 3 parts, compute sums for each part, and store in a dataclass.
     """
@@ -46,40 +54,64 @@ def process_image_direct(image: np.ndarray) -> ImageStatsDTO:
     b_sum = np.sum(image[:, 2 * segment_height :])
 
     # Return results as a dataclass
-    return ImageStatsDTO(r=r_sum, g=g_sum, b=b_sum, total=r_sum + g_sum + b_sum)
+    return ImageStats(r=r_sum, g=g_sum, b=b_sum, total=r_sum + g_sum + b_sum)
 
 
-def process_and_append(image: np.ndarray, stats_array: list) -> np.ndarray:
-    """
-    Process a new image, append its stats to the stats array
-    and calculate the variance array.
-    """
-    # Process the new image
-    stats = process_image_direct(image)
-    stats_array.append(stats)
+def calculate_fractions(
+    stats_list: list[ImageStats],
+) -> list[ImageStats]:
+    # Extract all r, g, b, t values from the stats_list
+    r_values = [stat.r for stat in stats_list]
+    g_values = [stat.g for stat in stats_list]
+    b_values = [stat.b for stat in stats_list]
+    t_values = [stat.total for stat in stats_list]
 
-    # Extract r, g, b values from all ImageStats objects in the stats array
-    r_values = np.array([d.r for d in stats_array])
-    g_values = np.array([d.g for d in stats_array])
-    b_values = np.array([d.b for d in stats_array])
+    print(r_values, g_values, b_values, t_values)
+    # Find min and max for each of the properties (r, g, b, t)
+    r_min, r_max = min(map(int, r_values)), max(map(int, r_values))
+    g_min, g_max = min(map(int, g_values)), max(map(int, g_values))
+    b_min, b_max = min(map(int, b_values)), max(map(int, b_values))
+    t_min, t_max = min(map(int, t_values)), max(map(int, t_values))
 
-    # Calculate min and max for r, g, b
-    r_min, r_max = np.min(r_values), np.max(r_values)
-    g_min, g_max = np.min(g_values), np.max(g_values)
-    b_min, b_max = np.min(b_values), np.max(b_values)
+    # If any property min == max, fractions for that property will be 0
+    if r_min == r_max:
+        r_fractions = [0] * len(stats_list)
+    else:
+        r_fractions = [(stat.r - r_min) / (r_max - r_min) for stat in stats_list]
 
-    # Compute variance (max - min) normalized by max
-    variance_array = np.array(
-        [
-            (r_max - r_min) / r_max if r_max != 0 else 0,
-            (g_max - g_min) / g_max if g_max != 0 else 0,
-            (b_max - b_min) / b_max if b_max != 0 else 0,
-        ]
-    )
-    return variance_array
+    if g_min == g_max:
+        g_fractions = [0] * len(stats_list)
+    else:
+        g_fractions = [(stat.g - g_min) / (g_max - g_min) for stat in stats_list]
 
-    
-def get_dtos_from_dataset(dataset: h5py.Dataset, start:int, stop: int) -> list[ImageStats]:
+    if b_min == b_max:
+        b_fractions = [0] * len(stats_list)
+    else:
+        b_fractions = [(stat.b - b_min) / (b_max - b_min) for stat in stats_list]
+
+    if t_min == t_max:
+        t_fractions = [0] * len(stats_list)
+    else:
+        t_fractions = [(stat.total - t_min) / (t_max - t_min) for stat in stats_list]
+
+    fractions = [
+        ImageStats(
+            r=r_fractions[i], g=g_fractions[i], b=b_fractions[i], total=t_fractions[i]
+        )
+        for i in range(len(stats_list))
+    ]
+
+    print(fractions)
+    return fractions
+
+
+def get_dtos_from_dataset(
+    dataset: h5py.Dataset, start: int, stop: int
+) -> list[ImageStats]:
+    raw_data: np.ndarray = dataset[start:stop]
+    stats_list = [(process_image_direct(image)) for image in raw_data]
+    fractions = calculate_fractions(stats_list)
+    return fractions
 
 
 def uri_to_path(uri: str) -> Path:
@@ -104,15 +136,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-"""
-overall plan.
-1. listen to stomp messages
-2. parse the messages to get file path
-3. from filepath parse data into davidia classes (ImageStats?)
-4. let Davidia send that data over websocket to the client
-"""
-
 state = {
     "filepath": "",
 }
@@ -188,6 +211,7 @@ class RunInstance(BaseModel):
     current_max_index: int = 0
     group_structure: dict[str, Any] | None = None
     dataset: h5py.Dataset | None = None
+    events_record: dict[int, list[ImageStats]] = {}
     # todo make something smarter than keeping 140MB in memory
 
 
@@ -248,10 +272,20 @@ class STOMPListener(stomp.ConnectionListener):
                 "start"
             ]  # here we know that it is only one step
             stop = specific_slice["indices"]["stop"]
-            # todo here we expand how much from the dataset we can read
-            # todo should we relay on the swmr mode or the notifications?
-            # todo here need to do the histogramming logic on the data extracted like in the previous iterations
-            return self._forward_slice_to_websockets(start, stop)
+            # todo for now always start at 0
+            if this_instance.dataset is None:
+                print("Error: No dataset found.")
+                return
+            # NOTE: relying on the notifications not SWMR mode
+            list_of_image_stats = get_dtos_from_dataset(this_instance.dataset, 0, stop)
+            this_instance.events_record[stop] = list_of_image_stats
+            packed_image_stats = ws_pack(list_of_image_stats)
+            packed_image_objects = ws_pack(
+                tranform_dataset_into_dto(this_instance.dataset[start:stop])
+            )
+
+            # todo should use davidia format to send this? or just the custom websocket solution?
+            self._forward_slice_to_websockets(start, stop)
 
     def _forward_slice_to_websockets(self, start, stop):
         if this_instance.dataset is None:
@@ -286,17 +320,6 @@ def start_stomp_listener():
     conn.subscribe(destination=STOP_TOPIC, id=1, ack="auto")
 
 
-if __name__ == "__main__":
-    from threading import Thread
-
-    import uvicorn
-
-    thread_for_stomp = Thread(target=start_stomp_listener)
-
-    thread_for_stomp.start()
-    uvicorn.run(app, port=8001)
-
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for clients to receive live image data."""
@@ -321,3 +344,14 @@ def get_dataset_shape():
         raise HTTPException(
             status_code=500, detail=f"Failed to get dataset shape: {str(e)}"
         ) from e
+
+
+if __name__ == "__main__":
+    from threading import Thread
+
+    import uvicorn
+
+    thread_for_stomp = Thread(target=start_stomp_listener)
+
+    thread_for_stomp.start()
+    uvicorn.run(app, port=8001)
