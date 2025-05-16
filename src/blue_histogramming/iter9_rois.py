@@ -14,15 +14,15 @@ from typing import Any, TypedDict
 from urllib.parse import urlparse
 
 import h5py
+from humanize import fractional
 import numpy as np
 import stomp
 from davidia.main import create_app
-from davidia.models.messages import Aspect, ImageData, ImageDataMessage, PlotConfig
+from davidia.models import ImageData
 from davidia.server.fastapi_utils import ws_pack
 from event_model import EventDescriptor, RunStart, StreamDatum, StreamResource
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.websockets import WebSocket
 from pydantic import BaseModel
 
 # todo read the topic from env vars to suit many deployments
@@ -36,64 +36,38 @@ class ColorSpectra(TypedDict):
     blue: tuple[float, float]
 
 
-# ✅ Pydantic model for API response (converts np.uint64 to int)
-class ImageStats(BaseModel):
-    r: float
-    g: float
-    b: float
-    total: float
-
-
-def process_image_direct(image: np.ndarray) -> ImageStats:
+def process_image_direct(image: np.ndarray, spectra: ColorSpectra) -> np.ndarray:
     """
-    Divide the image into 3 parts, compute sums for each part, and store in a dataclass.
+    Efficiently processes the image to compute the sum for each color channel.
+    Returns a 3-layer ndarray where each layer corresponds to r, g, b channels.
     """
-    # print(f"processing image: {image}")
-    # print(f"shape: {image.shape}")
-    h, _ = image.shape[0], image.shape[1]  # Get height and width of each 2D slice
-
+    # Get dimensions
+    h, _ = image.shape[0], image.shape[1]
     segment_height = h // 3
-    # print(f"h and segment h: {h}, {segment_height}")
 
-    # Divide image into three parts along the height dimension
-    r_sum = np.sum(image[:, :segment_height])
-    g_sum = np.sum(image[:, segment_height : 2 * segment_height])
-    b_sum = np.sum(image[:, 2 * segment_height :])
+    # Vectorized approach to sum each segment
+    r_sum = np.sum(image[:segment_height, :, :], axis=(0, 1))
+    g_sum = np.sum(image[segment_height : 2 * segment_height, :, :], axis=(0, 1))
+    b_sum = np.sum(image[2 * segment_height :, :, :], axis=(0, 1))
 
-    # Return results as a dataclass
-    return ImageStats(r=r_sum, g=g_sum, b=b_sum, total=r_sum + g_sum + b_sum)
+    # Stack results into a single 3-layer array
+    return np.array([r_sum, g_sum, b_sum])
 
 
-def calculate_fractions(stats_list: list[ImageStats]) -> list[ImageStats]:
-    # Convert list of ImageStats to a numpy array
-    stats_array = np.array(
-        [[stat.r, stat.g, stat.b, stat.total] for stat in stats_list], dtype=np.float64
-    )
-
+def calculate_fractions(stats_array: np.ndarray) -> np.ndarray:
+    """
+    Calculate the fractional values of the r, g, b sums for normalization.
+    Returns a normalized array with the same shape as the input.
+    """
     # Calculate min and max for each column (r, g, b, total)
-    mins = stats_array.min(axis=0)
-    maxs = stats_array.max(axis=0)
+    mins = np.min(stats_array, axis=0)
+    maxs = np.max(stats_array, axis=0)
 
-    # Handle zero division for columns with constant values
+    # Avoid divide-by-zero by ensuring non-zero ranges
     ranges = np.where(maxs - mins == 0, 1, maxs - mins)
 
-    # Normalize
-    fractions_array = (stats_array - mins) / ranges
-
-    # Convert back to list of ImageStats
-    return [
-        ImageStats(r=frac[0], g=frac[1], b=frac[2], total=frac[3])
-        for frac in fractions_array
-    ]
-
-
-def get_dtos_from_dataset(
-    dataset: h5py.Dataset, start: int, stop: int
-) -> list[ImageStats]:
-    raw_data: np.ndarray = dataset[start:stop]
-    stats_list = [(process_image_direct(image)) for image in raw_data]
-    fractions = calculate_fractions(stats_list)
-    return fractions
+    # Vectorized normalization
+    return (stats_array - mins) / ranges
 
 
 def uri_to_path(uri: str) -> Path:
@@ -108,6 +82,7 @@ def uri_to_path(uri: str) -> Path:
 
 # NOTE this defines a Davidia streaming app
 app = create_app()
+# app._plot_server
 
 
 # CORS setup for development
@@ -122,33 +97,8 @@ state = {
     "filepath": "",
 }
 
-active_websockets: set[WebSocket] = set()
-
 
 descriptors: set[str] = set()
-
-
-async def send_to_clients(image_data: ImageDataMessage):
-    """Send the transformed image data to all connected WebSocket clients."""
-    message_json = json.dumps(
-        image_data.model_dump()
-    )  # FastAPI's Pydantic models support `model_dump`
-    for websocket in active_websockets:
-        await websocket.send_text(message_json)
-
-
-def tranform_dataset_into_dto(dataset: h5py.Dataset) -> ImageDataMessage:
-    x_values = np.arange(dataset.shape[1])
-    y_values = np.arange(dataset.shape[0])
-    data = ImageData(values=dataset[...], aspect=Aspect.equal)
-    plot_config = PlotConfig(
-        x_label="x-axis",
-        y_label="y-axis",
-        x_values=x_values,
-        y_values=y_values,
-        title="image benchmarking plot",
-    )
-    return ImageDataMessage(im_data=data, plot_config=plot_config)
 
 
 def to_serializable(value: Any) -> str | int | float | list | None:
@@ -193,10 +143,15 @@ class RunInstance(BaseModel):
     current_max_index: int = 0
     group_structure: dict[str, Any] | None = None
     dataset: h5py.Dataset | None = None
-    events_record: dict[int, list[ImageStats]] = {}
-    # todo make something smarter than keeping 140MB in memory
+    events_record: np.ndarray = {}
+    big_matrix: np.ndarray
+    # todo make something smarter than keeping 140MB in memory - yeah, ndarray is that
+    rois: ColorSpectra | None = None
+    shape: tuple[float, float]
 
 
+# https://stackoverflow.com/questions/55311399/fastest-way-to-store-a-numpy-array-in-redis
+# alternatively use redis for this
 this_instance = RunInstance(
     path=Path(""),
     start=RunStart(uid="example_uid", time=0.0, scan_id=0, owner="example_owner"),
@@ -207,6 +162,9 @@ this_instance = RunInstance(
         run_start="example_run_start_uid",
     ),
     resource=None,
+    rois=None,
+    shape=(1, 1),
+    big_matrix=np.array([]),
 )
 
 
@@ -219,13 +177,22 @@ class STOMPListener(stomp.ConnectionListener):
         message = frame.body
         print(f"Message: {message}")
         message = json.loads(message)
-        if message["name"] == "descriptor":
+
+        if message["name"] == "start":
+            start_doc = RunStart(message["doc"])
+            # todo this will be ok but it's custom binding
+            shape = start_doc["shape"]  # type: ignore
+            rois = start_doc["color_rois"]  # type: ignore
+            this_instance.rois = rois
+            this_instance.shape = shape
+
+        elif message["name"] == "descriptor":
             descriptor = EventDescriptor(message["doc"])
             print(f"Descriptor: {descriptor}")
             this_instance.descriptor = descriptor
             descriptors.add(descriptor["uid"])
 
-        if message["name"] == "stream_resource":
+        elif message["name"] == "stream_resource":
             resource = StreamResource(message["doc"])
             filepath = uri_to_path(resource["uri"])
             this_instance.resource = resource
@@ -244,49 +211,40 @@ class STOMPListener(stomp.ConnectionListener):
                 return
             this_instance.dataset = dataset
 
-        if message["name"] == "stream_datum":
+        elif message["name"] == "stream_datum":
             if message["doc"]["uid"] not in descriptors:
                 print("no descriptor associated with this datum")
                 return
             specific_slice = StreamDatum(message)
             print(f"Specific Slice: {specific_slice}")
-            start = specific_slice["indices"][
+            start_point = specific_slice["indices"][
                 "start"
             ]  # here we know that it is only one step
             stop = specific_slice["indices"]["stop"]
-            # todo for now always start at 0
             if this_instance.dataset is None:
                 print("Error: No dataset found.")
                 return
             # NOTE: relying on the notifications not SWMR mode
-            list_of_image_stats = get_dtos_from_dataset(this_instance.dataset, 0, stop)
-            this_instance.events_record[stop] = list_of_image_stats
-            packed_image_stats = ws_pack(list_of_image_stats)
-            packed_image_objects = ws_pack(
-                tranform_dataset_into_dto(this_instance.dataset[start:stop])
+            x_bound, _ = this_instance.shape
+            xcoor, ycoor = divmod(start_point, x_bound)
+
+            raw_data: np.ndarray = this_instance.dataset[start_point:stop]
+            if this_instance.rois is None:
+                print("no region of interest specified in the start doc")
+
+            raw_rgb = process_image_direct(raw_data, this_instance.rois)  # type: ignore
+            this_instance.big_matrix[xcoor][ycoor][0] = raw_rgb  # here the 3 raw values
+            this_instance.big_matrix[:][:][1] = calculate_fractions(
+                this_instance.big_matrix[:][:][0]
             )
+            # here all the normalized values, along the correct axes
 
-            # todo should use davidia format to send this? or just the custom websocket solution?
-            self._forward_slice_to_websockets(start, stop)
-
-    def _forward_slice_to_websockets(self, start, stop):
-        if this_instance.dataset is None:
-            print("Error: No dataset found.")
-            return
-        image_data = tranform_dataset_into_dto(this_instance.dataset[start:stop])
-        # todo are images that indexable?
-        print(f"Image Data: {image_data}")
-
-        # Send to WebSocket clients
-        packed = ws_pack(image_data)
-        print(f"Packed: {packed}")
-
-        if packed is None:
-            print("Packed is None")
-            return
-            # todo maybe change from sending here to davidia sending this
-        for websocket in active_websockets:
-            asyncio.run(websocket.send_bytes(packed))
+            relevant_axes = this_instance.big_matrix[:][:][1]
+            message = PlotMessage(plot_id = 0, type=MsgType.new_image_data,relevant_axes, plot_config = {})
+            # forward to davidia
+            # todo how to access that internal plotserver?
+            asyncio.run(ps.prepare_data(message))
+            asyncio.run(ps.send_next_message())
 
 
 def start_stomp_listener():
@@ -294,26 +252,13 @@ def start_stomp_listener():
     print("Connecting to STOMP broker...")
     conn.set_listener("", STOMPListener())
     try:
+        # todo read from venv
         conn.connect("user", "password", wait=True)
     except Exception as e:
         print(f"Error: {e}")
         exit(1)
     print(f"trying to subscribe to topic, {STOP_TOPIC}")
     conn.subscribe(destination=STOP_TOPIC, id=1, ack="auto")
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for clients to receive live image data."""
-    await websocket.accept()
-    active_websockets.add(websocket)
-    try:
-        while True:
-            await websocket.receive_text()  # Keep connection alive
-    except Exception as e:
-        print(f"WebSocket error: {e}")
-    finally:
-        active_websockets.remove(websocket)
 
 
 @app.get("/get_dataset_shape/")
