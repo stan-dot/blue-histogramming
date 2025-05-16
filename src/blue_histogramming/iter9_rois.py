@@ -14,12 +14,10 @@ from typing import Any, TypedDict
 from urllib.parse import urlparse
 
 import h5py
-from humanize import fractional
 import numpy as np
 import stomp
 from davidia.main import create_app
-from davidia.models import ImageData
-from davidia.server.fastapi_utils import ws_pack
+from davidia.models import MsgType, PlotMessage
 from event_model import EventDescriptor, RunStart, StreamDatum, StreamResource
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -82,7 +80,6 @@ def uri_to_path(uri: str) -> Path:
 
 # NOTE this defines a Davidia streaming app
 app = create_app()
-# app._plot_server
 
 
 # CORS setup for development
@@ -116,7 +113,10 @@ def to_serializable(value: Any) -> str | int | float | list | None:
 
 
 def list_hdf5_tree_of_file(file: h5py.File) -> dict[str, Any]:
-    """Recursively lists all groups and datasets in an HDF5 file, returning a structured format."""
+    """
+    Recursively lists all groups and datasets in an HDF5 file,
+    returning a structured format.
+    """
     structure = {"groups": []}
 
     def extract_from_entry(name: str, obj):
@@ -143,7 +143,6 @@ class RunInstance(BaseModel):
     current_max_index: int = 0
     group_structure: dict[str, Any] | None = None
     dataset: h5py.Dataset | None = None
-    events_record: np.ndarray = {}
     big_matrix: np.ndarray
     # todo make something smarter than keeping 140MB in memory - yeah, ndarray is that
     rois: ColorSpectra | None = None
@@ -226,6 +225,7 @@ class STOMPListener(stomp.ConnectionListener):
                 return
             # NOTE: relying on the notifications not SWMR mode
             x_bound, _ = this_instance.shape
+            # todo this must be an int
             xcoor, ycoor = divmod(start_point, x_bound)
 
             raw_data: np.ndarray = this_instance.dataset[start_point:stop]
@@ -233,18 +233,23 @@ class STOMPListener(stomp.ConnectionListener):
                 print("no region of interest specified in the start doc")
 
             raw_rgb = process_image_direct(raw_data, this_instance.rois)  # type: ignore
-            this_instance.big_matrix[xcoor][ycoor][0] = raw_rgb  # here the 3 raw values
+            # todo count this not assuming square shapes, but with real proportions
+            this_instance.big_matrix[int(xcoor)][int(ycoor)][0] = (
+                raw_rgb  # here the 3 raw values
+            )
             this_instance.big_matrix[:][:][1] = calculate_fractions(
                 this_instance.big_matrix[:][:][0]
             )
             # here all the normalized values, along the correct axes
 
             relevant_axes = this_instance.big_matrix[:][:][1]
-            message = PlotMessage(plot_id = 0, type=MsgType.new_image_data,relevant_axes, plot_config = {})
+            message = PlotMessage(
+                0, MsgType.new_image_data, relevant_axes, plot_config={}
+            )
             # forward to davidia
             # todo how to access that internal plotserver?
-            asyncio.run(ps.prepare_data(message))
-            asyncio.run(ps.send_next_message())
+            asyncio.run(app._plot_server.prepare_data(message))  # noqa: SLF001
+            asyncio.run(app._plot_server.send_next_message())  # noqa: SLF001
 
 
 def start_stomp_listener():
