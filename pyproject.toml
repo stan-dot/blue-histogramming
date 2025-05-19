@@ -13,10 +13,9 @@ classifiers = [
 ]
 description = "Tying together bluesky plans with STOMP messages and Davidia HDF streaming"
 dependencies = [
-
-
     "asyncio",
     "click",
+    "davidia @ git+https://github.com/DiamondLightSource/davidia.git#subdirectory=server@3d734b334bb6ef6cb85291f0031e748bced81fd5",
     "fastapi",
     "h5py",
     "jsonschema",
