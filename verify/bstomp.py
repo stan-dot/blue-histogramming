@@ -1,11 +1,19 @@
-from bluesky_stomp.messaging import MessageContext, StompClient
-from bluesky_stomp.models import Broker, MessageQueue, MessageTopic
+# from pydantic import Secret, SecretStr
+import os
 
-client = StompClient.for_broker(Broker(host="rmq", port=61613),)
+from bluesky_stomp.messaging import MessageContext, StompClient
+from bluesky_stomp.models import BasicAuthentication, Broker, MessageQueue, MessageTopic
+
+os.environ["MY_PASSWORD"] = "password"
+auth = BasicAuthentication(username="user", password="${MY_PASSWORD}")
+
+client = StompClient.for_broker(
+    Broker(host="rmq", port=61613, auth=auth),
+)
 
 try:
     # Connect to the broker
-    client.connect("user", "password", wait=True)
+    client.connect()
 
     # Send a message to a queue and a topic
     client.send(MessageQueue(name="my-queue"), {"foo": 1, "bar": 2})

@@ -17,7 +17,7 @@ import h5py
 import numpy as np
 import stomp
 from davidia.main import create_app
-from davidia.models import MsgType, PlotMessage
+from davidia.models.messages import MsgType, PlotMessage
 from event_model import EventDescriptor, RunStart, StreamDatum, StreamResource
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -248,8 +248,8 @@ class STOMPListener(stomp.ConnectionListener):
             )
             # forward to davidia
             # todo how to access that internal plotserver?
-            asyncio.run(app._plot_server.prepare_data(message))  # noqa: SLF001
-            asyncio.run(app._plot_server.send_next_message())  # noqa: SLF001
+            asyncio.run(app._plot_server.prepare_data(message))  # type: ignore # noqa: SLF001
+            asyncio.run(app._plot_server.send_next_message())  # type: ignore # noqa: SLF001
 
 
 def start_stomp_listener():

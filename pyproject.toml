@@ -15,8 +15,9 @@ description = "Tying together bluesky plans with STOMP messages and Davidia HDF 
 dependencies = [
     "asyncio",
     "click",
-    "davidia @ git+https://github.com/DiamondLightSource/davidia.git#subdirectory=server@3d734b334bb6ef6cb85291f0031e748bced81fd5",
+    "davidia @ git+https://github.com/DiamondLightSource/davidia.git@3d734b334bb6ef6cb85291f0031e748bced81fd5#subdirectory=server",
     "fastapi",
+    "bluesky-stomp",
     "h5py",
     "jsonschema",
     "ophyd-async",
