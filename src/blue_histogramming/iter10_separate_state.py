@@ -15,7 +15,15 @@ from event_model import EventDescriptor, RunStart
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from blue_histogramming.i10_functions import (
+    calculate_fractions,
+    list_hdf5_tree_of_file,
+    process_image_direct,
+    to_serializable,
+    uri_to_path,
+)
 from blue_histogramming.i10_types import RunInstance, RunMetadata, RunState
+from blue_histogramming.stomp_listener import STOMPListener
 
 # todo read the topic from env vars to suit many deployments
 STOP_TOPIC = "/queue/test"
