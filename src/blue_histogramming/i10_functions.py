@@ -1,5 +1,3 @@
-
-
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -42,8 +40,6 @@ def calculate_fractions(stats_array: np.ndarray) -> np.ndarray:
     return (stats_array - mins) / ranges
 
 
-
-
 def uri_to_path(uri: str) -> Path:
     print(f"URI: {uri}")
     parsed = urlparse(uri)
@@ -52,7 +48,6 @@ def uri_to_path(uri: str) -> Path:
         raise ValueError(f"Unsupported URI scheme: {parsed.scheme}")
     # Remove leading slash if running on Windows (drive letters)
     return Path(parsed.path)
-
 
 
 def to_serializable(value: Any) -> str | int | float | list | None:
