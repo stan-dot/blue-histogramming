@@ -432,6 +432,38 @@ async def demo_stream(
         await manager.disconnect(client_id)
 
 
+@app.post("/set_dataset/")
+def set_dataset(
+    filepath: str | None = None,
+    filename: str | None = None,
+    dataset_name: str | None = None,
+):
+    state["filepath"] = filepath or state["filepath"]
+    state["filename"] = filename or state["filename"]
+    state["dataset_name"] = dataset_name or state["dataset_name"]
+    print(state)
+    dataset_name = dataset_name or state["dataset_name"]
+
+    try:
+        full_path = f"{state['filepath']}/{state['filename']}"
+        print(f"full path: {full_path}")
+        state["file"] = h5py.File(full_path, "r", libver="latest", swmr=True)
+        if dataset_name in state["file"]:
+            print(dataset_name)
+            print(state["file"]["entry"])
+            state["dset"] = state["file"][dataset_name]
+        else:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to set dataset: {str(e)}"
+        ) from e
+
+    return {
+        "message": "Dataset set successfully",
+        "shape": state["dset"].shape if state["dset"] else None,  # type: ignore
+    }
+
 if __name__ == "__main__":
     import uvicorn
 

@@ -11,7 +11,6 @@ class STOMPListener(stomp.ConnectionListener):
     def on_error(self, frame):
         print(f"Error: {frame.body}")
 
-    # todo need to parse the message and start streaming a file if needed https://docs.h5py.org/en/latest/quick.html
     def on_message(self, frame):
         print(f"Received message: {frame.body}")
         message = frame.body

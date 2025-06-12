@@ -58,7 +58,7 @@ if __name__ == "__main__":
     new_image = np.ones((4, 1216, 1936), dtype=np.uint8) * 2  # Example of a different image
     variance = process_and_append(new_image, stats_array)
 
-    # Output the variance array
+    # Output the variance arraay
     print("Variance array:", variance)
 
     # Output the stats array for reference

@@ -1,11 +1,3 @@
-"""
-overall plan.
-1. listen to stomp messages
-2. parse the messages to get file path
-3. from filepath parse data into davidia classes (ImageStats?)
-4. let Davidia send that data over websocket to the client
-"""
-
 import asyncio
 import json
 from logging import debug
