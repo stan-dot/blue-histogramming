@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from logging import debug
@@ -24,7 +25,7 @@ from davidia.models.messages import (
     PlotMessage,
 )
 from event_model import Event, EventDescriptor, RunStart, StreamDatum, StreamResource
-from fastapi import Depends, HTTPException, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -53,30 +54,29 @@ class RunMetadata(BaseModel):
     shape: tuple[float, float]
 
 
+# todo move to redis
 @dataclass
 class RunState:
     dataset: h5py.Dataset | None
     big_matrix: np.ndarray
 
 
+# todo move to redis
 class RunInstance:
     def __init__(self, meta: RunMetadata, state: RunState):
         self.meta = meta
         self.state = state
 
 
-# hold in redis
-visr_dataset_name = "entry/instrument/detector/data"
-file_writing_path = "/dls/b01-1/data/2025/cm40661-1/bluesky"
-default_filename = "-Stan-March-2025.hdf"
-state = {
-    "filepath": file_writing_path,
-    "filename": default_filename,
-    "dataset_name": visr_dataset_name,
-    "dset": None,
-    "file": None,
-    "stats_array": [],
-}
+from pydantic import BaseModel
+from datetime import datetime
+
+
+class SessionData(BaseModel):
+    session_id: str
+    created_at: datetime
+    user_agent: str | None = None
+    metadata: dict = {}
 
 
 class Settings(BaseSettings):
@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
     model_config = SettingsConfigDict(env_file=".env")
+    channel = "topic/public.worker.event"
 
 
 @lru_cache
@@ -92,11 +93,16 @@ def get_settings() -> Settings:
 
 
 def get_redis() -> redis.Redis:
-    return redis.Redis(host="localhost", port=6379)
+    settings = get_settings()
+
+    return redis.Redis(host=settings.redis_host, port=settings.redis_port)
 
 
-@app.on_event("startup")
-async def startup():
+app = FastAPI()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.redis = get_redis()
     app.state.manager = manager
@@ -112,6 +118,8 @@ async def startup():
         observer.join()  # Keep it running
 
     Thread(target=start_notifier, daemon=True).start()
+    yield
+    print("finishing the application run ")
 
 
 @app.get("/files")
@@ -179,15 +187,6 @@ async def get_dataset(
         return final_list  # ✅ FastAPI will return JSON array
 
     raise HTTPException(status_code=404, detail="Dataset not present")
-
-
-@app.post("/demo")
-async def demo(
-    redis: Annotated[dict, Depends(get_redis)],
-    settings: Annotated[dict, Depends(get_settings)],
-):
-    # first blueapi call
-    pass
 
 
 @app.get("/file/{id}/group/{group_name}/dataset/{dataset_name}/shape")
@@ -310,13 +309,13 @@ def set_dataset(
 events: list[Event] = []
 
 
-class AppState(TypedDict):
+class CurveFittingState(BaseModel):
     motor_names: list[str]
     main_detector_name: str
     shape: tuple[int, int]
 
 
-state: AppState = {"motor_names": [], "main_detector_name": "", "shape": (2, 100)}
+state = CurveFittingState(motor_names=[], main_detector_name="", shape=(2, 100))
 
 
 def on_event(event: Event):
@@ -325,6 +324,7 @@ def on_event(event: Event):
     events.append(event)
     if event.get("name") == "start":
         # start the curve fitting process
+        # doc plan name has the plan_name variable, crucial to listen to
         print("Starting curve fitting process...")
         state["shape"] = event.get("shape") or (event.get("num_points", 0)) or (0, 0)
         # shape = event.get("shape") or (event.get("num_points", 0))
@@ -352,7 +352,6 @@ STOP_TOPIC = "/queue/test"
 # NOTE this defines a Davidia streaming app
 davidia_app = create_app()
 
-
 # CORS setup for development
 davidia_app.add_middleware(
     CORSMiddleware,
@@ -365,11 +364,14 @@ state = {
     "filepath": "",
 }
 
+# https://fastapi.tiangolo.com/advanced/sub-applications/?h=mount#top-level-application
+app.mount("/davidia", davidia_app)
 
+# todo add to the per-session state
 descriptors: set[str] = set()
 
 # https://stackoverflow.com/questions/55311399/fastest-way-to-store-a-numpy-array-in-redis
-# alternatively use redis for this
+# todo use redis for this
 this_instance = RunInstance(
     meta=RunMetadata(
         path=Path(""),
@@ -403,30 +405,6 @@ def start_stomp_listener():
         exit(1)
     print(f"trying to subscribe to topic, {STOP_TOPIC}")
     conn.subscribe(destination=STOP_TOPIC, id=1, ack="auto")
-
-
-@davidia_app.get("/get_dataset_shape/")
-def get_dataset_shape():
-    if this_instance.state.dataset is None:
-        raise HTTPException(status_code=404, detail="Dataset not initialized")
-    try:
-        return {"shape": this_instance.state.dataset.shape}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get dataset shape: {str(e)}"
-        ) from e
-
-
-def run_server():
-    """Start the FastAPI app and STOMP listener."""
-    thread_for_stomp = Thread(target=start_stomp_listener)
-    thread_for_stomp.start()
-
-    uvicorn.run(davidia_app, port=8001)
-
-
-# todo read from settgins
-CHANNEL = "/topic/public.worker.event"
 
 
 def process_image_direct(
@@ -637,7 +615,24 @@ def tranform_dataset_into_dto(dataset: h5py.Dataset) -> ImageDataMessage:
     return ImageDataMessage(im_data=data, plot_config=plot_config)
 
 
+async def start_default_session():
+    visr_dataset_name = "entry/instrument/detector/data"
+    file_writing_path = "/dls/b01-1/data/2025/cm40661-1/bluesky"
+    default_filename = "-Stan-March-2025.hdf"
+    state = {
+        "filepath": file_writing_path,
+        "filename": default_filename,
+        "dataset_name": visr_dataset_name,
+        "dset": None,
+        "file": None,
+        "stats_array": [],
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
+    """Start the FastAPI app and STOMP listener."""
+    thread_for_stomp = Thread(target=start_stomp_listener)
+    thread_for_stomp.start()
     uvicorn.run(app, host="0.0.0.0", port=8002)
