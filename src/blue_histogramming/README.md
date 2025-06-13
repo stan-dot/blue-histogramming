@@ -147,3 +147,30 @@ Let's for now do per-login data sessions with unique server-assigned IDs - anony
 
 Need to make tags at api routes to group them.
 
+
+## how to get mock data
+it's logged automatically by blueapi, just run the plan and get the logs from there.
+# normalize based on events
+# xvals = [e["data"][motor_names[-1]] for e in events]
+# yvals = [e["data"][main_detector_name] for e in events]
+# # normalize
+# xvals = [x - xvals[0] for x in xvals]
+
+# # todo consider a dataframe instead? maybe with polars https://pola.rs/
+results = []
+# # https://docs.pydantic.dev/latest/examples/files/#csv-files
+
+# https://docs.python.org/3/library/errno.html
+
+"""
+Callback listener that processes collected documents and
+fits detector data with curve :
+<li>Single curve for 1-dimensional line scan,
+<li> N curves for grid scans with shape NxM (M points per curve).
+
+Uses scipy curve_fit function for curve fitting
+fit_function -> function to be used during fitting
+fit_bounds -> range for each parameter to be used when fitting.
+    A tuple of (min, max) value for each parameter.
+    e.g. for parameters a, b,c : ( (min a, max a), (min b, max b), (min c, max c))
+"""

@@ -7,14 +7,16 @@ import stomp
 from davidia.models.messages import MsgType, PlotConfig, PlotMessage
 from event_model import EventDescriptor, RunStart, StreamDatum, StreamResource
 
-from blue_histogramming.i10_functions import (
+from blue_histogramming.helpers import (
     calculate_fractions,
     list_hdf5_tree_of_file,
     process_image_direct,
     uri_to_path,
 )
-from blue_histogramming.i10_types import RunInstance
+from blue_histogramming.types import RunInstance
 
+# todo read from settgins
+CHANNEL = "/topic/public.worker.event"
 
 class STOMPListener(stomp.ConnectionListener):
     def __init__(self, state_manager: RunInstance):
@@ -112,3 +114,18 @@ class STOMPListener(stomp.ConnectionListener):
         asyncio.run(app._plot_server.prepare_data(msg))  # type: ignore # noqa: SLF001
         asyncio.run(app._plot_server.send_next_message())  # type: ignore # noqa: SLF001
         # todo fix this
+
+
+def tranform_dataset_into_dto(dataset: h5py.Dataset) -> ImageDataMessage:
+    x_values = np.arange(dataset.shape[1])
+    y_values = np.arange(dataset.shape[0])
+    data = ImageData(values=dataset[...], aspect=Aspect.equal)
+    plot_config = PlotConfig(
+        x_label="x-axis",
+        y_label="y-axis",
+        x_values=x_values,
+        y_values=y_values,
+        title="image benchmarking plot",
+    )
+    return ImageDataMessage(im_data=data, plot_config=plot_config)
+

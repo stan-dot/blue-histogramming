@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 import h5py
 import numpy as np
 
+from blue_histogramming.types import ColorSpectra
+
 
 def process_image_direct(image: np.ndarray, spectra: ColorSpectra) -> np.ndarray:
     """
