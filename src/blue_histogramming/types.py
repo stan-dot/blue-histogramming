@@ -1,7 +1,6 @@
-
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 import h5py
 import numpy as np
@@ -9,11 +8,15 @@ from event_model import EventDescriptor, RunStart, StreamResource
 from pydantic import BaseModel
 
 
-# NOTE this is copied from the VISR repo
-class ColorSpectra(TypedDict):
-    red: tuple[float, float]
-    green: tuple[float, float]
-    blue: tuple[float, float]
+class Range(BaseModel):
+    min_value: float
+    max_value: float
+
+
+class ColorSpectra(BaseModel):
+    red: Range
+    green: Range
+    blue: Range
 
 
 class RunMetadata(BaseModel):
@@ -37,4 +40,3 @@ class RunInstance:
     def __init__(self, meta: RunMetadata, state: RunState):
         self.meta = meta
         self.state = state
-

@@ -1,8 +1,10 @@
 from pathlib import Path
+from threading import Thread
 from typing import TypedDict
 
 import numpy as np
 import stomp
+import uvicorn
 from davidia.main import create_app
 from event_model import Event, EventDescriptor, RunStart
 from fastapi import HTTPException
@@ -21,7 +23,6 @@ class AppState(TypedDict):
 
 
 state: AppState = {"motor_names": [], "main_detector_name": "", "shape": (2, 100)}
-
 
 def on_event(event: Event):
     # process the event
@@ -51,23 +52,14 @@ def start_stomp_connection():
     return conn
 
 
-# conn = start_stomp_connection()
-# if conn is None:
-#     print("Failed to connect to STOMP server.")
-# else:
-#     conn.subscribe(CHANNEL, id=1, ack="auto")
-#     conn.disconnect()
-# return
-
-# todo read the topic from env vars to suit many deployments
 # todo read the topic from env vars to suit many deployments
 STOP_TOPIC = "/queue/test"
 # NOTE this defines a Davidia streaming app
-app = create_app()
+davidia_app = create_app()
 
 
 # CORS setup for development
-app.add_middleware(
+davidia_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
@@ -118,7 +110,7 @@ def start_stomp_listener():
     conn.subscribe(destination=STOP_TOPIC, id=1, ack="auto")
 
 
-@app.get("/get_dataset_shape/")
+@davidia_app.get("/get_dataset_shape/")
 def get_dataset_shape():
     if this_instance.state.dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not initialized")
@@ -130,12 +122,9 @@ def get_dataset_shape():
         ) from e
 
 
-if __name__ == "__main__":
-    from threading import Thread
-
-    import uvicorn
-
+def run_server():
+    """Start the FastAPI app and STOMP listener."""
     thread_for_stomp = Thread(target=start_stomp_listener)
-
     thread_for_stomp.start()
-    uvicorn.run(app, port=8001)
+
+    uvicorn.run(davidia_app, port=8001)

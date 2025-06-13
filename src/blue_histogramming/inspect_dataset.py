@@ -1,19 +1,14 @@
 import asyncio
-import json
 import os
-from dataclasses import dataclass
 from functools import lru_cache
 from threading import Thread
-from typing import Annotated, Any
+from typing import Annotated
 
 import h5py
 import numpy as np
 import redis
-from fastapi import Depends, FastAPI, HTTPException, WebSocket
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi import Depends, HTTPException, WebSocket
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 # hold in redis
@@ -44,7 +39,6 @@ def get_settings() -> Settings:
 
 def get_redis() -> redis.Redis:
     return redis.Redis(host="localhost", port=6379)
-
 
 
 @app.on_event("startup")
@@ -257,6 +251,7 @@ def set_dataset(
         "message": "Dataset set successfully",
         "shape": state["dset"].shape if state["dset"] else None,  # type: ignore
     }
+
 
 if __name__ == "__main__":
     import uvicorn
