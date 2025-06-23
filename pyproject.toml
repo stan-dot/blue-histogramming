@@ -26,6 +26,7 @@ dependencies = [
     "uvicorn",
     "redis",
     "requests",
+    "watchdog"
 
 
 ]
