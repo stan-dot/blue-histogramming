@@ -3,13 +3,11 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from logging import debug
 from pathlib import Path
-from threading import Thread
-from typing import Annotated, Any, TypedDict, cast
+from typing import Annotated, Any, cast
 from urllib.parse import urlparse
 
 import h5py
@@ -26,72 +24,23 @@ from davidia.models.messages import (
     PlotConfig,
     PlotMessage,
 )
-from event_model import Event, EventDescriptor, RunStart, StreamDatum, StreamResource
+from event_model import EventDescriptor, RunStart, StreamDatum, StreamResource
 from fastapi import (
     Cookie,
     Depends,
     FastAPI,
     HTTPException,
-    Request,
     Response,
     WebSocket,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
+from redis import Redis
 
-
-class Range(BaseModel):
-    min_value: float
-    max_value: float
-
-
-class ColorSpectra(BaseModel):
-    red: Range
-    green: Range
-    blue: Range
-
-
-class RunMetadata(BaseModel):
-    path: Path
-    start: RunStart
-    descriptor: EventDescriptor
-    resource: StreamResource | None
-    current_max_index: int = 0
-    group_structure: dict[str, Any] | None = None
-    rois: ColorSpectra | None = None
-    shape: tuple[float, float]
-
-
-# todo move to redis
-@dataclass
-class RunState:
-    dataset: h5py.Dataset | None
-    big_matrix: np.ndarray
-
-
-class RunInstance:
-    def __init__(self, meta: RunMetadata, state: RunState):
-        self.meta = meta
-        self.state = state
-        self.descriptors = []
-
-
-class SessionData(BaseModel):
-    session_id: str
-    created_at: datetime
-    user_agent: str | None = None
-    metadata: dict = {}
-
-
-class Settings(BaseSettings):
-    allowed_hdf_path: Path = Path("/dls/b01-1/data/2025/cm40661-1/bluesky")
-    redis_host: str = "localhost"
-    redis_port: int = 6379
-    model_config = SettingsConfigDict(env_file=".env")
-    channel = "topic/public.worker.event"
+from blue_histogramming.models import Settings
+from blue_histogramming.session_state_manager import (
+    SessionStateManager,
+)
+from blue_histogramming.utils import calculate_fractions, process_image_direct
 
 
 @lru_cache
@@ -103,8 +52,6 @@ def get_redis() -> redis.Redis:
     settings = get_settings()
     return redis.Redis(host=settings.redis_host, port=settings.redis_port)
 
-
-SESSION_TIMEOUT_SECONDS = 900  # 15 minutes
 
 app = FastAPI()
 
@@ -119,9 +66,8 @@ davidia_app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-state = {
-    "filepath": "",
-}
+
+state: dict[str, SessionStateManager] = {}
 
 # https://fastapi.tiangolo.com/advanced/sub-applications/?h=mount#top-level-application
 app.mount("/davidia", davidia_app)
@@ -133,18 +79,6 @@ async def lifespan(app: FastAPI):
     app.state.redis = get_redis()
 
     print(settings)
-    print(f"Starting notifier for {settings.allowed_hdf_path}")
-
-    def start_notifier():
-        observer = Observer()
-        handler: FileSystemEventHandler = FileSystemEventHandler()
-        observer.schedule(
-            handler, settings.allowed_hdf_path.as_posix(), recursive=False
-        )
-        observer.start()
-        observer.join()  # Keep it running
-
-    Thread(target=start_notifier, daemon=True).start()
     yield
     print("finishing the application run ")
 
@@ -157,7 +91,7 @@ async def login(
 ):
     session_id = str(uuid.uuid4())
     redis.hset(f"session:{session_id}", mapping={"status": "active"})
-    redis.expire(f"session:{session_id}", SESSION_TIMEOUT_SECONDS)
+    redis.expire(f"session:{session_id}", settings.session_timeout_seconds)
     response.set_cookie(key="session_id", value=session_id, httponly=True)
     return {"message": "Session created", "session_id": session_id}
 
@@ -316,7 +250,7 @@ async def login_demo(
 ):
     session_id = str(uuid.uuid4())
     redis.hset(f"session:{session_id}", mapping={"status": "active"})
-    redis.expire(f"session:{session_id}", SESSION_TIMEOUT_SECONDS)
+    redis.expire(f"session:{session_id}", settings.session_timeout_seconds)
     visr_dataset_name = "entry/instrument/detector/data"
     file_writing_path = "/dls/b01-1/data/2025/cm40661-1/bluesky"
     default_filename = "-Stan-March-2025.hdf"
@@ -463,143 +397,13 @@ def monitor_plan(
     )
     return response
 
-
-def start_stomp_listener():
-    conn = stomp.Connection([("rmq", 61613)])
-    print("Connecting to STOMP broker...")
-    conn.set_listener("", STOMPListener())
-    try:
-        # Read STOMP credentials from environment variables or .env
-        stomp_user = os.environ.get("STOMP_USER", "user")
-        stomp_password = os.environ.get("STOMP_PASSWORD", "password")
-        conn.connect(stomp_user, stomp_password, wait=True)
-    except Exception as e:
-        print(f"Error: {e}")
-        exit(1)
-    print(f"trying to subscribe to topic, {STOP_TOPIC}")
-    conn.subscribe(destination=STOP_TOPIC, id=1, ack="auto")
-
-
-class SessionStateManager:
-    def __init__(self, redis_client):
-        self.redis = redis_client
-        self.memory_state = {}  # {session_id: {"numpy_data": ..., ...}}
-
-    def set_numpy_state(self, session_id, numpy_data):
-        self.memory_state[session_id] = numpy_data
-
-    def get_numpy_state(self, session_id):
-        return self.memory_state.get(session_id)
-
-    def set_metadata(self, session_id, metadata: dict):
-        self.redis.set(f"session:{session_id}:metadata", json.dumps(metadata))
-
-    def get_metadata(self, session_id):
-        data = self.redis.get(f"session:{session_id}:metadata")
-        return json.loads(data) if data else {}
-
-    def clear_session(self, session_id):
-        self.memory_state.pop(session_id, None)
-        self.redis.delete(f"session:{session_id}:metadata")
-
-
-def process_image_direct(
-    image: np.ndarray, use_roi: bool = False, spectra: ColorSpectra | None = None
-) -> np.ndarray:
-    """
-    Efficiently processes the image to compute the sum for each color channel.
-    Returns a 3-layer ndarray where each layer corresponds to r, g, b channels.
-    """
-    # Get dimensions
-    h, _ = image.shape[0], image.shape[1]
-    # todo divide by ROIs
-    segment_height = h // 3
-
-    # Vectorized approach to sum each segment
-    r_sum = np.sum(image[:segment_height, :, :], axis=(0, 1))
-    g_sum = np.sum(image[segment_height : 2 * segment_height, :, :], axis=(0, 1))
-    b_sum = np.sum(image[2 * segment_height :, :, :], axis=(0, 1))
-
-    if use_roi and spectra is not None:
-        r_sum = np.sum(
-            image[spectra.red.min_value : spectra.red.max_value, :, :], axis=(0, 1)
-        )
-        g_sum = np.sum(
-            image[spectra.green.min_value : spectra.green.max_value, :, :], axis=(0, 1)
-        )
-        b_sum = np.sum(
-            image[spectra.blue.min_value : spectra.blue.max_value :, :, :], axis=(0, 1)
-        )
-
-    # Stack results into a single 3-layer array
-    return np.array([r_sum, g_sum, b_sum])
-
-
-def calculate_fractions(stats_array: np.ndarray) -> np.ndarray:
-    """
-    Calculate the fractional values of the r, g, b sums for normalization.
-    Returns a normalized array with the same shape as the input.
-    """
-    # Calculate min and max for each column (r, g, b, total)
-    mins = np.min(stats_array, axis=0)
-    maxs = np.max(stats_array, axis=0)
-
-    # Avoid divide-by-zero by ensuring non-zero ranges
-    ranges = np.where(maxs - mins == 0, 1, maxs - mins)
-
-    # Vectorized normalization
-    return (stats_array - mins) / ranges
-
-
-def uri_to_path(uri: str) -> Path:
-    print(f"URI: {uri}")
-    parsed = urlparse(uri)
-    print(f"Parsed URI: {parsed}")
-    if parsed.scheme != "file":
-        raise ValueError(f"Unsupported URI scheme: {parsed.scheme}")
-    # Remove leading slash if running on Windows (drive letters)
-    return Path(parsed.path)
-
-
-def to_serializable(value: Any) -> str | int | float | list | None:
-    """Convert NumPy types to standard Python types for JSON serialization."""
-    if isinstance(value, np.bytes_):  # Convert bytes to string
-        return value.decode()
-    elif isinstance(value, np.integer):  # Convert np.int32, np.int64, etc. to int
-        return int(value)
-    elif isinstance(value, np.floating):  # Convert np.float32, np.float64 to float
-        return float(value)
-    elif isinstance(value, np.ndarray):  # Convert np.array to list
-        return value.tolist()
-    return value  # Assume already serializable
-
-
-def list_hdf5_tree_of_file(file: h5py.File) -> dict[str, Any]:
-    """
-    Recursively lists all groups and datasets in an HDF5 file,
-    returning a structured format.
-    """
-    structure = {"groups": []}
-
-    def extract_from_entry(name: str, obj):
-        obj_type = "Group" if isinstance(obj, h5py.Group) else "Dataset"
-        entry = {
-            "name": name,
-            "type": obj_type,
-            "items": [
-                {"name": k, "value": to_serializable(v)} for k, v in obj.attrs.items()
-            ],
-        }
-        structure["groups"].append(entry)
-
-    file.visititems(extract_from_entry)
-
-    return structure
-
-
 class STOMPListener(stomp.ConnectionListener):
-    def __init__(self, redis: redis.Redis):
-        self.state = None
+    state: RunState
+    redis: Redis
+
+    def __init__(self, redis: Redis, state: RunState):
+        self.state = state
+        self.redis = redis
         self.handlers = {
             "start": self.handle_start,
             "descriptor": self.handle_descriptor,
@@ -623,22 +427,30 @@ class STOMPListener(stomp.ConnectionListener):
         handler(message["doc"])
 
     def handle_start(self, doc: dict):
-        start_doc = RunStart(doc)  # type: ignore
-        self.state.meta.shape = start_doc["shape"]  # type: ignore
-        self.state.meta.rois = start_doc["color_rois"]  # type: ignore
+        start_doc = cast(RunStart, doc)
+        print(f"Start document: {start_doc}")
+        self.redis.hset(
+            f"run_instance:{start_doc['uid']}",
+            mapping={
+                "status": "active",
+                "start_time": datetime.fromtimestamp(start_doc["time"]).isoformat(),
+                "plan_name": start_doc["plan_name"],  # type: ignore
+                "shape": start_doc["shape"],  # type: ignore
+                "rois": json.dumps(start_doc["color_rois"], default=to_serializable),  # type: ignore
+                "uid": start_doc["uid"],
+            },
+        )
 
     def handle_descriptor(self, doc: dict):
-        descriptor = EventDescriptor(doc)
+        descriptor = cast(EventDescriptor, doc)
         print(f"Descriptor: {descriptor}")
-        self.state.meta.descriptor = descriptor
-        self.state.descriptors.append(descriptor["uid"])
-        # todo add descriptors inject, maybe only here?
+        self.state.descriptors.append(descriptor)
 
     def handle_stream_resource(self, doc: dict):
-        resource = StreamResource(doc)
+        resource = cast(StreamResource, doc)
         filepath = uri_to_path(resource["uri"])
-        self.state.meta.resource = resource
-        self.state.meta.path = filepath
+        self.metadata.resource = resource
+        self.state.metadata.path = filepath
 
         with h5py.File(filepath, "r") as file:
             structures = list_hdf5_tree_of_file(file)
@@ -660,12 +472,11 @@ class STOMPListener(stomp.ConnectionListener):
             print("No descriptor associated with this datum")
             return
 
-        # datum = StreamDatum({"doc": doc})
-        datum = StreamDatum(doc)  # type: ignore
+        datum = cast(StreamDatum, doc)
         start_point = datum["indices"]["start"]
         stop = datum["indices"]["stop"]
 
-        dataset = self.state.state.dataset
+        dataset = self.state.dataset
         if dataset is None:
             print("Error: No dataset found.")
             return
@@ -684,7 +495,7 @@ class STOMPListener(stomp.ConnectionListener):
             self.state.state.big_matrix[:, :, 0]
         )
 
-        relevant_axes = self.state.state.big_matrix[:, :, 1]  # future use?
+        relevant_axes = self.state.big_matrix[:, :, 1]  # future use?
         print(f"relevant axes: {relevant_axes}")
         msg = PlotMessage(
             plot_id="0",
@@ -694,7 +505,6 @@ class STOMPListener(stomp.ConnectionListener):
         )
         asyncio.run(app._plot_server.prepare_data(msg))  # type: ignore # noqa: SLF001
         asyncio.run(app._plot_server.send_next_message())  # type: ignore # noqa: SLF001
-        # todo fix this
 
 
 def tranform_dataset_into_dto(dataset: h5py.Dataset) -> ImageDataMessage:
@@ -715,6 +525,4 @@ if __name__ == "__main__":
     import uvicorn
 
     """Start the FastAPI app and STOMP listener."""
-    thread_for_stomp = Thread(target=start_stomp_listener)
-    thread_for_stomp.start()
     uvicorn.run(app, host="0.0.0.0", port=8002)
