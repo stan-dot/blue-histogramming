@@ -22,6 +22,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 
 from blue_histogramming.models import Settings
+from blue_histogramming.routers import file_router
 from blue_histogramming.session_state_manager import (
     SessionStateManager,
 )
@@ -71,6 +72,7 @@ def get_session_manager(
     return state[session_id]
 
 
+app.include_router(file_router.router)
 # https://fastapi.tiangolo.com/advanced/sub-applications/?h=mount#top-level-application
 app.mount("/davidia", davidia_app)
 
@@ -124,165 +126,6 @@ async def get_files(
     except Exception:
         files = []
     return {"files": files}
-
-
-@app.get("/file/{id}/detail")
-async def get_groups_in_file(
-    redis: Annotated[redis.Redis, Depends(get_redis)],
-    settings: Annotated[Settings, Depends(get_settings)],
-    id: str,
-):
-    """
-    show the groups in the file
-
-    Parameters
-    ----------
-    redis : Annotated[redis.Redis, Depends
-        _description_
-    settings : Annotated[Settings, Depends
-        _description_
-    id : str
-        _description_
-
-    Returns
-    -------
-    _type_
-        _description_
-    """
-
-    file_path = os.path.join(settings.allowed_hdf_path, id)
-    if not os.path.exists(file_path):
-        return {"groups": []}
-    try:
-        file: h5py.File = h5py.File(file_path, "r")
-        groups = list_hdf5_tree_of_file(file)
-        file.close()
-    except Exception:
-        groups = []
-    print(groups)
-    return {"groups": groups}
-
-
-@app.get("/file/{id}/group/{group_name}")
-async def get_dataset_in_group(
-    redis: Annotated[redis.Redis, Depends(get_redis)],
-    settings: Annotated[Settings, Depends(get_settings)],
-    id: str,
-    group_name: str,
-):
-    # list all the datasets in the group
-    file_path = os.path.join(settings.allowed_hdf_path, id)
-    with h5py.File(file_path, "r") as f:
-        things = f[group_name]
-        if not isinstance(things, h5py.Group):
-            raise HTTPException(
-                status_code=404, detail=f"Group {group_name} not found in file {id}"
-            )
-        datasets = list(things)
-    return {"datasets": datasets}
-
-
-@app.get("/file/{id}/group/{group_name}/dataset/{dataset_name}")
-async def get_dataset(
-    redis: Annotated[redis.Redis, Depends(get_redis)],
-    settings: Annotated[Settings, Depends(get_settings)],
-    id: str,
-    group_name: str,
-    dataset_name: str,
-    latest_n_images: int = 10,
-):
-    # get the dataset
-    file_path = os.path.join(settings.allowed_hdf_path, id)
-    if file_path is None:
-        raise HTTPException(status_code=404, detail="Dataset not present")
-
-
-    with h5py.File(file_path, "r") as f:
-        dset = guard_dataset_and_group(id, group_name, dataset_name, f)
-        raw_data = dset[-latest_n_images:]
-        stats_list = [(process_image_direct(img)) for img in raw_data]
-        print(f"stats list: {stats_list}")
-        fractions_list = calculate_fractions(np.array(stats_list))
-        print(f"nice fractions: {fractions_list}")
-        final_list: list[ImageDataMessage] = [
-            ImageDataMessage(im_data=a) for a in fractions_list
-        ]
-        plot_message = PlotMessage(
-            plot_id=dataset_name,
-            type=MsgType.new_image_data,
-            params=ImageData(values=fractions_list[0], aspect=1.0),
-        )
-        print(f"final list: {final_list}")
-
-        print(f"stats: {stats_list}")
-        return final_list  # ✅ FastAPI will return JSON array
-
-    raise HTTPException(status_code=404, detail="Dataset not present")
-
-
-def guard_dataset_and_group(
-    file_id: str, group_name: str, dataset_name: str, f: h5py.File
-):
-    if group_name not in f:
-        raise HTTPException(
-            status_code=404, detail=f"Group {group_name} not found in file {file_id}"
-        )
-    group = f[group_name]
-    if not isinstance(group, h5py.Group):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Group {group_name} is not a valid group in file {file_id}",
-        )
-
-    dset = group[dataset_name]
-    if not isinstance(dset, h5py.Dataset):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Dataset {dataset_name} not found in group {group_name} of file {file_id}",  # noqa: E501
-        )
-
-    return dset
-
-
-@app.get("/file/{id}/group/{group_name}/dataset/{dataset_name}/shape")
-async def get_dataset_shape(
-    redis: Annotated[redis.Redis, Depends(get_redis)],
-    settings: Annotated[Settings, Depends(get_settings)],
-    id: str,
-    group_name: str,
-    dataset_name: str,
-):
-    # get the dataset shape
-    file_path = os.path.join(settings.allowed_hdf_path, id)
-    with h5py.File(file_path, "r") as f:
-        dset = guard_dataset_and_group(id, group_name, dataset_name, f)
-        shape = dset.shape
-    return {"shape": shape}
-
-
-@app.post("/login/demo")
-async def login_demo(
-    response: Response,
-    redis: Annotated[redis.Redis, Depends(get_redis)],
-    settings: Annotated[Settings, Depends(get_settings)],
-):
-    session_id = str(uuid.uuid4())
-    redis.hset(f"session:{session_id}", mapping={"status": "active"})
-    redis.expire(f"session:{session_id}", settings.session_timeout_seconds)
-    visr_dataset_name = "entry/instrument/detector/data"
-    file_writing_path = "/workspaces/blue-histogramming/data"
-    default_filename = "test2.hdf"
-    redis.hset(
-        f"session:{session_id}",
-        mapping={
-            "status": "active",
-            "filepath": file_writing_path,
-            "filename": default_filename,
-            "dataset_name": visr_dataset_name,
-        },
-    )
-    response.set_cookie(key="session_id", value=session_id, httponly=True)
-    return {"message": "Session created", "session_id": session_id}
 
 
 @app.websocket("/ws/{client_id}/dataset/{dataset_name}")
