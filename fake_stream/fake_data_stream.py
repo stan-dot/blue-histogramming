@@ -65,7 +65,7 @@ async def replay_events_from_json(
 async def main():
     conn = start_stomp_connection()
     print("Connected to STOMP broker")
-    await replay_events_from_json(Path("events-to-emit-6.json"), conn, 2)
+    await replay_events_from_json(Path("extracted_events.json"), conn, 2)
     conn.disconnect()
 
 

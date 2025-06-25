@@ -1,50 +1,15 @@
-
-import asyncio
 import json
 import os
-import uuid
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from datetime import datetime
-from functools import lru_cache
-from logging import debug
 from pathlib import Path
-from threading import Thread
-from typing import Annotated, Any, TypedDict, cast
-from urllib.parse import urlparse
 
-import h5py
 import numpy as np
-import redis
 import stomp
-import uvicorn
-from davidia.main import create_app
-from davidia.models.messages import (
-    Aspect,
-    ImageData,
-    ImageDataMessage,
-    MsgType,
-    PlotConfig,
-    PlotMessage,
-)
-from event_model import Event, EventDescriptor, RunStart, StreamDatum, StreamResource
-from fastapi import (
-    Cookie,
-    Depends,
-    FastAPI,
-    HTTPException,
-    Request,
-    Response,
-    WebSocket,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from redis import Redis
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-
+from blue_histogramming.models import RunMetadata, RunState, Settings
+from blue_histogramming.stomp_listener import STOMPListener
 
 
 class SessionStateManager:
@@ -80,8 +45,9 @@ class SessionStateManager:
         except Exception as e:
             print(f"Error: {e}")
             exit(1)
-        print(f"trying to subscribe to topic, {STOP_TOPIC}")
-        conn.subscribe(destination=STOP_TOPIC, id=1, ack="auto")
+        topic = settings.channel
+        print(f"trying to subscribe to topic, {topic}")
+        conn.subscribe(destination=topic, id=1, ack="auto")
         return conn
 
     def set_numpy_state(self, session_id, numpy_data):
@@ -122,4 +88,3 @@ class SessionStateManager:
         self.stop_observer_for_session(session_id)
         self.memory_state.pop(session_id, None)
         self.redis.delete(f"session:{session_id}:metadata")
-

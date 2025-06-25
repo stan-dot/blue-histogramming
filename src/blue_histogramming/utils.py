@@ -1,45 +1,17 @@
-import asyncio
-import json
-import os
-import uuid
-from contextlib import asynccontextmanager
-from datetime import datetime
-from functools import lru_cache
-from logging import debug
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Any
 from urllib.parse import urlparse
 
 import h5py
 import numpy as np
-import redis
-import stomp
-import uvicorn
-from davidia.main import create_app
 from davidia.models.messages import (
     Aspect,
     ImageData,
     ImageDataMessage,
-    MsgType,
     PlotConfig,
-    PlotMessage,
 )
-from event_model import EventDescriptor, RunStart, StreamDatum, StreamResource
-from fastapi import (
-    Cookie,
-    Depends,
-    FastAPI,
-    HTTPException,
-    Response,
-    WebSocket,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from redis import Redis
 
-from blue_histogramming.models import ColorSpectra, RunMetadata, RunState, Settings
-from blue_histogramming.session_state_manager import (
-    SessionStateManager,
-)
+from blue_histogramming.models import ColorSpectra
 
 
 def calculate_fractions(stats_array: np.ndarray) -> np.ndarray:
@@ -133,3 +105,17 @@ def list_hdf5_tree_of_file(file: h5py.File) -> dict[str, Any]:
     file.visititems(extract_from_entry)
 
     return structure
+
+
+def tranform_dataset_into_dto(dataset: h5py.Dataset) -> ImageDataMessage:
+    x_values = np.arange(dataset.shape[1])
+    y_values = np.arange(dataset.shape[0])
+    data = ImageData(values=dataset[...], aspect=Aspect.equal)
+    plot_config = PlotConfig(
+        x_label="x-axis",
+        y_label="y-axis",
+        x_values=x_values,
+        y_values=y_values,
+        title="image benchmarking plot",
+    )
+    return ImageDataMessage(im_data=data, plot_config=plot_config)

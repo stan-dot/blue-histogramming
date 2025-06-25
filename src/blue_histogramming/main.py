@@ -1,30 +1,18 @@
 import asyncio
-import json
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
 from functools import lru_cache
-from logging import debug
-from pathlib import Path
-from typing import Annotated, Any, cast
-from urllib.parse import urlparse
+from typing import Annotated
 
 import h5py
 import numpy as np
 import redis
-import stomp
 import uvicorn
 from davidia.main import create_app
 from davidia.models.messages import (
-    Aspect,
-    ImageData,
     ImageDataMessage,
-    MsgType,
-    PlotConfig,
-    PlotMessage,
 )
-from event_model import EventDescriptor, RunStart, StreamDatum, StreamResource
 from fastapi import (
     Cookie,
     Depends,
@@ -34,13 +22,16 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from redis import Redis
 
 from blue_histogramming.models import Settings
 from blue_histogramming.session_state_manager import (
     SessionStateManager,
 )
-from blue_histogramming.utils import calculate_fractions, process_image_direct
+from blue_histogramming.utils import (
+    calculate_fractions,
+    list_hdf5_tree_of_file,
+    process_image_direct,
+)
 
 
 @lru_cache
@@ -55,7 +46,6 @@ def get_redis() -> redis.Redis:
 
 app = FastAPI()
 
-STOP_TOPIC = os.environ.get("STOP_TOPIC", "/queue/test")
 davidia_app = create_app()
 
 # CORS setup for development
@@ -99,24 +89,26 @@ async def login(
 @app.get("/files")
 async def get_files(
     redis: Annotated[redis.Redis, Depends(get_redis)],
-    settings: Annotated[Settings, Depends(get_settings)],
+    session_id: str | None = Cookie(default=None),
 ):
     """
-    list all the files in the allowed_hdf_path directory
-
-    Parameters
-    ----------
-    redis : Annotated[redis.Redis, Depends
-        _description_
-    settings : Annotated[Settings, Depends
-        _description_
-
-    Returns
-    -------
-    _type_
-        _description_
+    List all the files in the session's allowed directory.
     """
-    files = [f for f in os.listdir(settings.allowed_hdf_path) if f.endswith(".hdf")]
+    print(f"Session ID: {session_id}")
+    if not session_id:
+        return {"files": []}
+    session_key = f"session:{session_id}"
+    session_data = redis.hgetall(session_key)
+    # Redis returns bytes, decode to str
+    session_data = {k.decode(): v.decode() for k, v in session_data.items()}
+    session_path = session_data.get("filepath")
+    print(f"Session path: {session_path}")
+    if not session_path or not os.path.isdir(session_path):
+        return {"files": []}
+    try:
+        files = [f for f in os.listdir(session_path) if f.endswith(".hdf")]
+    except Exception:
+        files = []
     return {"files": files}
 
 
@@ -145,8 +137,14 @@ async def get_groups_in_file(
     """
 
     file_path = os.path.join(settings.allowed_hdf_path, id)
-    file: h5py.File = h5py.File(file_path, "r")
-    groups = list_hdf5_tree_of_file(file)
+    if not os.path.exists(file_path):
+        return {"groups": []}
+    try:
+        file: h5py.File = h5py.File(file_path, "r")
+        groups = list_hdf5_tree_of_file(file)
+        file.close()
+    except Exception:
+        groups = []
     print(groups)
     return {"groups": groups}
 
@@ -252,8 +250,8 @@ async def login_demo(
     redis.hset(f"session:{session_id}", mapping={"status": "active"})
     redis.expire(f"session:{session_id}", settings.session_timeout_seconds)
     visr_dataset_name = "entry/instrument/detector/data"
-    file_writing_path = "/dls/b01-1/data/2025/cm40661-1/bluesky"
-    default_filename = "-Stan-March-2025.hdf"
+    file_writing_path = "/workspaces/blue-histogramming/data"
+    default_filename = "test2.hdf"
     redis.hset(
         f"session:{session_id}",
         mapping={
@@ -397,132 +395,7 @@ def monitor_plan(
     )
     return response
 
-class STOMPListener(stomp.ConnectionListener):
-    state: RunState
-    redis: Redis
 
-    def __init__(self, redis: Redis, state: RunState):
-        self.state = state
-        self.redis = redis
-        self.handlers = {
-            "start": self.handle_start,
-            "descriptor": self.handle_descriptor,
-            "stream_resource": self.handle_stream_resource,
-            "stream_datum": self.handle_stream_datum,
-        }
-
-    def on_error(self, frame):
-        print(f"Error: {frame.body}")
-
-    def on_message(self, frame):
-        print(f"Received message: {frame.body}")
-        message = json.loads(frame.body)
-        name = message.get("name")
-
-        handler = self.handlers.get(name)
-        if not handler:
-            print(f"Unhandled message type: {name}")
-            return
-
-        handler(message["doc"])
-
-    def handle_start(self, doc: dict):
-        start_doc = cast(RunStart, doc)
-        print(f"Start document: {start_doc}")
-        self.redis.hset(
-            f"run_instance:{start_doc['uid']}",
-            mapping={
-                "status": "active",
-                "start_time": datetime.fromtimestamp(start_doc["time"]).isoformat(),
-                "plan_name": start_doc["plan_name"],  # type: ignore
-                "shape": start_doc["shape"],  # type: ignore
-                "rois": json.dumps(start_doc["color_rois"], default=to_serializable),  # type: ignore
-                "uid": start_doc["uid"],
-            },
-        )
-
-    def handle_descriptor(self, doc: dict):
-        descriptor = cast(EventDescriptor, doc)
-        print(f"Descriptor: {descriptor}")
-        self.state.descriptors.append(descriptor)
-
-    def handle_stream_resource(self, doc: dict):
-        resource = cast(StreamResource, doc)
-        filepath = uri_to_path(resource["uri"])
-        self.metadata.resource = resource
-        self.state.metadata.path = filepath
-
-        with h5py.File(filepath, "r") as file:
-            structures = list_hdf5_tree_of_file(file)
-            debug(f"Structures: {structures}")
-            self.state.meta.group_structure = structures
-
-            dataset_path = resource["parameters"]["dataset"]
-            dataset = file[dataset_path]
-
-            if not isinstance(dataset, h5py.Dataset):
-                print("Error: 'data' is not a dataset.")
-                return
-
-            self.state.state.dataset = dataset
-
-    def handle_stream_datum(self, doc: dict):
-        uid = doc["uid"]
-        if uid not in self.state.descriptors:
-            print("No descriptor associated with this datum")
-            return
-
-        datum = cast(StreamDatum, doc)
-        start_point = datum["indices"]["start"]
-        stop = datum["indices"]["stop"]
-
-        dataset = self.state.dataset
-        if dataset is None:
-            print("Error: No dataset found.")
-            return
-
-        x_bound, _ = self.state.meta.shape
-        xcoor, ycoor = divmod(start_point, x_bound)
-
-        raw_data = dataset[start_point:stop]
-        if self.state.meta.rois is None:
-            print("No region of interest specified")
-            return
-
-        raw_rgb = process_image_direct(raw_data, True, self.state.meta.rois)
-        self.state.state.big_matrix[int(xcoor)][int(ycoor)][0] = raw_rgb
-        self.state.state.big_matrix[:, :, 1] = calculate_fractions(
-            self.state.state.big_matrix[:, :, 0]
-        )
-
-        relevant_axes = self.state.big_matrix[:, :, 1]  # future use?
-        print(f"relevant axes: {relevant_axes}")
-        msg = PlotMessage(
-            plot_id="0",
-            type=MsgType.new_image_data,
-            plot_config=PlotConfig(),
-            params="",
-        )
-        asyncio.run(app._plot_server.prepare_data(msg))  # type: ignore # noqa: SLF001
-        asyncio.run(app._plot_server.send_next_message())  # type: ignore # noqa: SLF001
-
-
-def tranform_dataset_into_dto(dataset: h5py.Dataset) -> ImageDataMessage:
-    x_values = np.arange(dataset.shape[1])
-    y_values = np.arange(dataset.shape[0])
-    data = ImageData(values=dataset[...], aspect=Aspect.equal)
-    plot_config = PlotConfig(
-        x_label="x-axis",
-        y_label="y-axis",
-        x_values=x_values,
-        y_values=y_values,
-        title="image benchmarking plot",
-    )
-    return ImageDataMessage(im_data=data, plot_config=plot_config)
-
-
-if __name__ == "__main__":
-    import uvicorn
-
+def run_server():
     """Start the FastAPI app and STOMP listener."""
     uvicorn.run(app, host="0.0.0.0", port=8002)

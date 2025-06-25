@@ -36,6 +36,9 @@ class RunState(BaseModel):
     big_matrix: np.ndarray
     descriptors: list[EventDescriptor] = []
 
+    class Config:
+        arbitrary_types_allowed = True
+
 
 class SessionData(BaseModel):
     session_id: str
@@ -46,10 +49,10 @@ class SessionData(BaseModel):
 
 class Settings(BaseSettings):
     allowed_hdf_path: Path = Path("/dls/b01-1/data/2025/cm40661-1/bluesky")
-    redis_host: str = "localhost"
+    redis_host: str = "dragonfly"
     redis_port: int = 6379
     rmq_host: str = "rmq"
     rmq_port: int = 61613
     model_config = SettingsConfigDict(env_file=".env")
-    channel = "topic/public.worker.event"
+    channel: str = "topic/public.worker.event"
     session_timeout_seconds: int = 900  # 15 minutes
