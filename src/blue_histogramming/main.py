@@ -10,9 +10,7 @@ import numpy as np
 import redis
 import uvicorn
 from davidia.main import create_app
-from davidia.models.messages import (
-    ImageDataMessage,
-)
+from davidia.models.messages import ImageData, ImageDataMessage, MsgType, PlotMessage
 from fastapi import (
     Cookie,
     Depends,
@@ -59,6 +57,20 @@ davidia_app.add_middleware(
 
 state: dict[str, SessionStateManager] = {}
 
+
+def get_session_manager(
+    redis: Annotated[redis.Redis, Depends(get_redis)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    session_id: str | None = Cookie(default=None),
+) -> SessionStateManager:
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Session ID is required")
+    # Use global state dict to persist managers per session
+    if session_id not in state:
+        state[session_id] = SessionStateManager(session_id, redis, settings)
+    return state[session_id]
+
+
 # https://fastapi.tiangolo.com/advanced/sub-applications/?h=mount#top-level-application
 app.mount("/davidia", davidia_app)
 
@@ -66,6 +78,7 @@ app.mount("/davidia", davidia_app)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    # todo that is old from starlette, need to make into dependency
     app.state.redis = get_redis()
 
     print(settings)
@@ -73,13 +86,14 @@ async def lifespan(app: FastAPI):
     print("finishing the application run ")
 
 
-@app.post("/login/")
+@app.post("/login")
 async def login(
     response: Response,
     redis: Annotated[redis.Redis, Depends(get_redis)],
     settings: Annotated[Settings, Depends(get_settings)],
 ):
     session_id = str(uuid.uuid4())
+
     redis.hset(f"session:{session_id}", mapping={"status": "active"})
     redis.expire(f"session:{session_id}", settings.session_timeout_seconds)
     response.set_cookie(key="session_id", value=session_id, httponly=True)
@@ -182,6 +196,7 @@ async def get_dataset(
     if file_path is None:
         raise HTTPException(status_code=404, detail="Dataset not present")
 
+
     with h5py.File(file_path, "r") as f:
         dset = guard_dataset_and_group(id, group_name, dataset_name, f)
         raw_data = dset[-latest_n_images:]
@@ -192,6 +207,11 @@ async def get_dataset(
         final_list: list[ImageDataMessage] = [
             ImageDataMessage(im_data=a) for a in fractions_list
         ]
+        plot_message = PlotMessage(
+            plot_id=dataset_name,
+            type=MsgType.new_image_data,
+            params=ImageData(values=fractions_list[0], aspect=1.0),
+        )
         print(f"final list: {final_list}")
 
         print(f"stats: {stats_list}")
@@ -218,7 +238,7 @@ def guard_dataset_and_group(
     if not isinstance(dset, h5py.Dataset):
         raise HTTPException(
             status_code=404,
-            detail=f"Dataset {dataset_name} not found in group {group_name} of file {file_id}",
+            detail=f"Dataset {dataset_name} not found in group {group_name} of file {file_id}",  # noqa: E501
         )
 
     return dset
@@ -267,19 +287,22 @@ async def login_demo(
 
 @app.websocket("/ws/{client_id}/dataset/{dataset_name}")
 async def stream_dataset(
-    settings: Annotated[dict, Depends(get_settings)],
-    redis: Annotated[dict, Depends(get_redis)],
+    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
     client_id: str,
     websocket: WebSocket,
     dataset_name: str,
 ):
+    # Example: accept the websocket and start observer
+    await websocket.accept()
+    # You can now use session_manager, e.g.:
+    # session_manager.start_observer_for_session(session_id, folder, websocket)
+    # ...rest of your logic...
     pass
 
 
 @app.websocket("/ws/{client_id}/demo/{filename}")
 async def demo_stream(
-    settings: Annotated[dict, Depends(get_settings)],
-    redis: Annotated[dict, Depends(get_redis)],
+    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
     client_id: str,
     websocket: WebSocket,
     filename: str,
@@ -287,11 +310,17 @@ async def demo_stream(
     """
     endpoint with hardcoded read
     """
+    folder = os.path.dirname(os.path.abspath(filename))
 
+    # here the websocket is persisted
+    session_manager.start_observer_for_session(
+        session_id=client_id,
+        folder=folder,
+        websocket=websocket,
+    )
     dataset_name: str = "entry/instrument/detector/data"
-    filepath = "/dls/b01-1/data/2025/cm40661-1/bluesky"
+    filepath = "/workspaces/blue-histogramming/data"
     f: h5py.File = h5py.File(os.path.join(filepath, filename), "r")
-    # todo connect over websocket really here
     dset = guard_dataset_and_group(
         filename, "entry/instrument/detector", dataset_name, f
     )
@@ -337,8 +366,6 @@ def set_dataset(
     dataset_name: str,
     session_id: str | None = Cookie(default=None),
 ):
-    # set this session dataset and path
-    redis.hset(f"session:{session_id}", mapping={"status": "active"})
     # check if path in allowed_hdf_path
     if not filepath.startswith(settings.allowed_hdf_path.as_posix()):
         raise HTTPException(

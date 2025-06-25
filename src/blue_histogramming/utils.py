@@ -39,7 +39,8 @@ def process_image_direct(
     """
     # Get dimensions
     h, _ = image.shape[0], image.shape[1]
-    segment_height = h // 3
+    DEFAULT_SEGMENTS_NUMBER = 3
+    segment_height = h // DEFAULT_SEGMENTS_NUMBER
 
     # Vectorized approach to sum each segment
     r_sum = np.sum(image[:segment_height, :, :], axis=(0, 1))

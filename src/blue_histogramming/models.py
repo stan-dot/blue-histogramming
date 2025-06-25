@@ -48,7 +48,7 @@ class SessionData(BaseModel):
 
 
 class Settings(BaseSettings):
-    allowed_hdf_path: Path = Path("/dls/b01-1/data/2025/cm40661-1/bluesky")
+    allowed_hdf_path: Path = Path("/workspaces/blue-histogramming/data")
     redis_host: str = "dragonfly"
     redis_port: int = 6379
     rmq_host: str = "rmq"
