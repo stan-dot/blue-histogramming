@@ -15,13 +15,11 @@
 - [x] add blueapi httpx client for interprocess communication - might be better than requests, and need auth and will persist as dependency
 - [x] add nested settings objects really
 - [x] make state manager just one - no need for global state like that raw
-- [ ] add 'start demo session' endpoint
-- [ ] need just 1 ws endpoint
-- [ ] how to push and get back data from davidia? is the server holding just 1 image?
-- [ ] should I send back to the UI the davidia plotting url? or just push the data and it would stream the right data?
-- [ ] make internal davidia client to push the data to it - the plot id is part of the message, but the uuid is unique
-
-
+- [x] add 'start demo session' endpoint
+- [x] need just 1 ws endpoint
+- [x] how to push and get back data from davidia? is the server holding just 1 image?
+- [x] should I send back to the UI the davidia plotting url? or just push the data and it would stream the right data?
+- [x] make internal davidia client to push the data to it - the plot id is part of the message, but the uuid is unique
 
 ## nt doing
 - [ ] make an html based stream for testing maybe? - no, rather 

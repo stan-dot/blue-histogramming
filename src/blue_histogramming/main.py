@@ -238,6 +238,8 @@ async def demo_endpoint(
     session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
     client_id: str,
     websocket: WebSocket,
+    plan_name: str,
+    session_id: str | None = Cookie(default=None),
 ):
     """
     Orchestrates a demo process:
@@ -258,7 +260,6 @@ async def demo_endpoint(
         await websocket.send_json(
             {"status": "info", "msg": "Listening for STOMP events..."}
         )
-        # session_manager.start_stomp_listener(plan_name)  # implement as needed
 
         # 2. Start the plan via BlueAPI (using your blueapi client)
         from blue_histogramming.proxy import get_blueapi_client
