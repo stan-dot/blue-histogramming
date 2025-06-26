@@ -1,6 +1,8 @@
 ### main.py
 import asyncio
+
 from message_listener import listen_for_events
+
 
 async def main():
     await listen_for_events()
@@ -11,7 +13,9 @@ if __name__ == "__main__":
 
 ### config.py
 import os
+
 from pydantic import BaseSettings
+
 
 class Settings(BaseSettings):
     MESSAGE_BUS_URL: str = os.getenv("MESSAGE_BUS_URL", "nats://localhost:4222")
@@ -24,7 +28,9 @@ settings = Settings()
 
 ### message_listener.py
 import asyncio
+
 from event_aggregator import handle_event_stream
+
 
 async def listen_for_events():
     print("Listening to message bus...")
@@ -33,10 +39,11 @@ async def listen_for_events():
 
 ### event_aggregator.py
 import asyncio
-from data_encoder import dataframe_to_base64_csv
-from graphql_client import submit_to_graphql, poll_job
-from config_updater import update_config
+
 import pandas as pd
+from config_updater import update_config
+from data_encoder import dataframe_to_base64_csv
+from graphql_client import poll_job, submit_to_graphql
 
 RUN_BUFFERS = {}
 
@@ -63,9 +70,9 @@ async def handle_event(run_id: str, event: dict):
 
 
 ### data_encoder.py
-import pandas as pd
 import base64
 from io import BytesIO
+
 
 def dataframe_to_base64_csv(df: pd.DataFrame) -> str:
     buffer = BytesIO()
@@ -80,6 +87,7 @@ def base64_csv_to_dataframe(b64_string: str) -> pd.DataFrame:
 ### graphql_client.py
 import asyncio
 import random
+
 
 async def submit_to_graphql(b64_data: str) -> str:
     print("Submitting to GraphQL...")
@@ -97,6 +105,7 @@ async def poll_job(job_id: str) -> str:
 
 ### config_updater.py
 import asyncio
+
 
 async def update_config(artifact_path: str):
     print(f"Updating config with {artifact_path}...")

@@ -1,5 +1,5 @@
-import re
 import json
+import re
 
 with open("events-to-emit-11.json") as f:
     text = f.read()

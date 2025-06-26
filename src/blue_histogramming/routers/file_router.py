@@ -5,14 +5,12 @@ import h5py
 import httpx
 import numpy as np
 from davidia.models.messages import (
-    ImageData,
     ImageDataMessage,
-    MsgType,
-    PlotMessage,
 )
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, WebSocket
+from fastapi import APIRouter, Cookie, Depends, HTTPException
+from msgpack import packb as _mp_packb
+from pydantic import BaseModel
 
-from blue_histogramming.main import get_session_manager
 from blue_histogramming.models import Settings
 from blue_histogramming.proxy import get_davidia_client
 from blue_histogramming.session_state_manager import SessionStateManager
@@ -177,18 +175,3 @@ async def get_dataset_shape(
         dset = guard_dataset_and_group(id, group_name, dataset_name, f)
         shape = dset.shape
     return {"shape": shape}
-
-
-@router.websocket("/ws/{client_id}/dataset/{dataset_name}")
-async def stream_dataset(
-    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
-    client_id: str,
-    websocket: WebSocket,
-    dataset_name: str,
-):
-    # Example: accept the websocket and start observer
-    await websocket.accept()
-    # You can now use session_manager, e.g.:
-    # session_manager.start_observer_for_session(session_id, folder, websocket)
-    # ...rest of your logic...
-    pass

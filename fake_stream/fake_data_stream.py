@@ -47,7 +47,7 @@ async def replay_events_from_json(
     with open(json_path) as f:
         data = json.load(f)
     length = len(data)
-    print(f"Loaded {length} events from {json_path}")  
+    print(f"Loaded {length} events from {json_path}")
     if length == 0:
         print(f"No events found in {json_path}")
         return

@@ -6,14 +6,11 @@ from functools import lru_cache
 from typing import Annotated
 
 import h5py
-import httpx
 import numpy as np
 import redis
 import uvicorn
 from davidia.main import create_app
-from davidia.models.messages import ImageData, ImageDataMessage, MsgType, PlotMessage
 from fastapi import (
-    Body,
     Cookie,
     Depends,
     FastAPI,
@@ -23,7 +20,6 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 
-from blue_histogramming.deps import get_davidia_client
 from blue_histogramming.models import Settings
 from blue_histogramming.routers import file_router
 from blue_histogramming.session_state_manager import (
@@ -31,7 +27,6 @@ from blue_histogramming.session_state_manager import (
 )
 from blue_histogramming.utils import (
     calculate_fractions,
-    list_hdf5_tree_of_file,
     process_image_direct,
 )
 

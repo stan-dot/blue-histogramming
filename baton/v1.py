@@ -2,7 +2,6 @@ import re
 import signal
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 import requests
 from fastapi import BackgroundTasks, FastAPI, HTTPException
