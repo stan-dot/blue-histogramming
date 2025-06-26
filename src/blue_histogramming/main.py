@@ -6,12 +6,14 @@ from functools import lru_cache
 from typing import Annotated
 
 import h5py
+import httpx
 import numpy as np
 import redis
 import uvicorn
 from davidia.main import create_app
 from davidia.models.messages import ImageData, ImageDataMessage, MsgType, PlotMessage
 from fastapi import (
+    Body,
     Cookie,
     Depends,
     FastAPI,
@@ -21,6 +23,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 
+from blue_histogramming.deps import get_davidia_client
 from blue_histogramming.models import Settings
 from blue_histogramming.routers import file_router
 from blue_histogramming.session_state_manager import (
@@ -38,9 +41,19 @@ def get_settings() -> Settings:
     return Settings()
 
 
+# Global session manager registry (singleton pattern)
+session_managers: dict[str, SessionStateManager] = {}
+
+
 def get_redis() -> redis.Redis:
     settings = get_settings()
-    return redis.Redis(host=settings.redis_host, port=settings.redis_port)
+    # Use a single Redis connection for the app, cached with lru_cache
+    return _get_redis(settings.redis.host, settings.redis.port)
+
+
+@lru_cache
+def _get_redis(host: str, port: int) -> redis.Redis:
+    return redis.Redis(host=host, port=port)
 
 
 app = FastAPI()
@@ -60,16 +73,16 @@ state: dict[str, SessionStateManager] = {}
 
 
 def get_session_manager(
-    redis: Annotated[redis.Redis, Depends(get_redis)],
     settings: Annotated[Settings, Depends(get_settings)],
     session_id: str | None = Cookie(default=None),
 ) -> SessionStateManager:
     if not session_id:
         raise HTTPException(status_code=400, detail="Session ID is required")
-    # Use global state dict to persist managers per session
-    if session_id not in state:
-        state[session_id] = SessionStateManager(session_id, redis, settings)
-    return state[session_id]
+    if session_id not in session_managers:
+        session_managers[session_id] = SessionStateManager(
+            session_id, get_redis(), settings
+        )
+    return session_managers[session_id]
 
 
 app.include_router(file_router.router)
@@ -80,8 +93,6 @@ app.mount("/davidia", davidia_app)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    # todo that is old from starlette, need to make into dependency
-    app.state.redis = get_redis()
 
     print(settings)
     yield
@@ -91,32 +102,27 @@ async def lifespan(app: FastAPI):
 @app.post("/login")
 async def login(
     response: Response,
-    redis: Annotated[redis.Redis, Depends(get_redis)],
+    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
     settings: Annotated[Settings, Depends(get_settings)],
 ):
-    session_id = str(uuid.uuid4())
-
-    redis.hset(f"session:{session_id}", mapping={"status": "active"})
-    redis.expire(f"session:{session_id}", settings.session_timeout_seconds)
-    response.set_cookie(key="session_id", value=session_id, httponly=True)
-    return {"message": "Session created", "session_id": session_id}
+    session_manager.set_session_data({"status": "active"})
+    session_manager.redis.expire(
+        f"session:{session_manager.session_id}", settings.session_timeout_seconds
+    )
+    response.set_cookie(
+        key="session_id", value=session_manager.session_id, httponly=True
+    )
+    return {"message": "Session created", "session_id": session_manager.session_id}
 
 
 @app.get("/files")
 async def get_files(
-    redis: Annotated[redis.Redis, Depends(get_redis)],
-    session_id: str | None = Cookie(default=None),
+    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
 ):
     """
     List all the files in the session's allowed directory.
     """
-    print(f"Session ID: {session_id}")
-    if not session_id:
-        return {"files": []}
-    session_key = f"session:{session_id}"
-    session_data = redis.hgetall(session_key)
-    # Redis returns bytes, decode to str
-    session_data = {k.decode(): v.decode() for k, v in session_data.items()}
+    session_data = session_manager.get_session_data()
     session_path = session_data.get("filepath")
     print(f"Session path: {session_path}")
     if not session_path or not os.path.isdir(session_path):
@@ -128,23 +134,8 @@ async def get_files(
     return {"files": files}
 
 
-@app.websocket("/ws/{client_id}/dataset/{dataset_name}")
-async def stream_dataset(
-    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
-    client_id: str,
-    websocket: WebSocket,
-    dataset_name: str,
-):
-    # Example: accept the websocket and start observer
-    await websocket.accept()
-    # You can now use session_manager, e.g.:
-    # session_manager.start_observer_for_session(session_id, folder, websocket)
-    # ...rest of your logic...
-    pass
-
-
 @app.websocket("/ws/{client_id}/demo/{filename}")
-async def demo_stream(
+async def stream_existing_dataset(
     session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
     client_id: str,
     websocket: WebSocket,
@@ -157,14 +148,13 @@ async def demo_stream(
 
     # here the websocket is persisted
     session_manager.start_observer_for_session(
-        session_id=client_id,
         folder=folder,
         websocket=websocket,
     )
     dataset_name: str = "entry/instrument/detector/data"
     filepath = "/workspaces/blue-histogramming/data"
     f: h5py.File = h5py.File(os.path.join(filepath, filename), "r")
-    dset = guard_dataset_and_group(
+    dset = file_router.guard_dataset_and_group(
         filename, "entry/instrument/detector", dataset_name, f
     )
     try:
@@ -201,13 +191,12 @@ async def demo_stream(
 
 @app.post("/set_dataset/")
 def set_dataset(
-    redis: Annotated[redis.Redis, Depends(get_redis)],
+    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
     settings: Annotated[Settings, Depends(get_settings)],
     response: Response,
     filepath: str,
     filename: str,
     dataset_name: str,
-    session_id: str | None = Cookie(default=None),
 ):
     # check if path in allowed_hdf_path
     if not filepath.startswith(settings.allowed_hdf_path.as_posix()):
@@ -215,18 +204,22 @@ def set_dataset(
             status_code=403,
             detail=f"Path {filepath} is not allowed. Must start with {settings.allowed_hdf_path}",
         )
-    # set the filepath for this session
-    redis.hset(f"session:{session_id}", "filepath", filepath)
-    # set the filename for this session
-    redis.hset(f"session:{session_id}", "filename", filename)
-    # set the dataset_name for this session
-    redis.hset(f"session:{session_id}", "dataset_name", dataset_name)
+    # set the filepath, filename, and dataset_name for this session
+    session_manager.set_session_data(
+        {
+            "filepath": filepath,
+            "filename": filename,
+            "dataset_name": dataset_name,
+        }
+    )
 
     try:
-        full_path = f"{state['filepath']}/{state['filename']}"
+        full_path = f"{filepath}/{filename}"
         f = h5py.File(full_path, "r", libver="latest", swmr=True)
         if dataset_name in f:
-            pass
+            dset = file_router.guard_dataset_and_group(
+                filename, "entry/instrument/detector", dataset_name, f
+            )
         else:
             raise HTTPException(status_code=404, detail="Dataset not found")
     except Exception as e:
@@ -236,34 +229,73 @@ def set_dataset(
 
     return {
         "message": "Dataset set successfully",
-        "shape": state["dset"].shape if state["dset"] else None,  # type: ignore
+        "shape": dset.shape if "dset" in locals() else None,
     }
 
 
-@app.post("/monitor_plan/")
-def monitor_plan(
-    redis: Annotated[redis.Redis, Depends(get_redis)],
-    settings: Annotated[Settings, Depends(get_settings)],
-    response: Response,
-    plan_name: str,
-    session_id: str | None = Cookie(default=None),
+@app.websocket("/ws/{client_id}/plan/demo")
+async def demo_endpoint(
+    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
+    client_id: str,
+    websocket: WebSocket,
 ):
     """
-    Monitor a plan by subscribing to a STOMP topic.
-    This will make the stomp listener start listening for messages related to the plan for the start document
+    Orchestrates a demo process:
+    1. Accepts the websocket connection.
+    2. Starts listening to STOMP for events.
+    3. Sends a POST request to BlueAPI to start a plan.
+    4. Handles events, reads filesystem, processes data.
+    5. Sends progress and final plot URL to the client.
     """
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Session ID is required")
+    await websocket.accept()
+    plan_name = "demo_plan"  # Hardcoded for demo, replace with actual logic
+    try:
+        await websocket.send_json(
+            {"status": "starting", "msg": f"Starting plan {plan_name}"}
+        )
 
-    redis.hset(
-        f"run_instance:{session_id}",
-        mapping={
-            "status": "active",
-            "plan_name": plan_name,
-            "session_id": session_id,
-        },
-    )
-    return response
+        # 1. Start STOMP listener (simulate or call your session_manager logic)
+        await websocket.send_json(
+            {"status": "info", "msg": "Listening for STOMP events..."}
+        )
+        # session_manager.start_stomp_listener(plan_name)  # implement as needed
+
+        # 2. Start the plan via BlueAPI (using your blueapi client)
+        from blue_histogramming.proxy import get_blueapi_client
+
+        blueapi_client = get_blueapi_client()
+        # Example payload, adjust as needed
+        plan_payload = {"name": plan_name, "params": {"detectors": ["manta"]}}
+        try:
+            response = await blueapi_client.post("/task", json=plan_payload)
+            response.raise_for_status()
+            plan_response = response.json()
+            await websocket.send_json({"status": "plan_started", "msg": plan_response})
+        except Exception as e:
+            await websocket.send_json(
+                {"status": "error", "msg": f"Failed to start plan: {e}"}
+            )
+            return
+
+        # 3. Simulate or handle events, read/process data (replace with real logic)
+        await websocket.send_json({"status": "processing", "msg": "Processing data..."})
+        await asyncio.sleep(2)  # Simulate work
+
+        # 4. When ready, send the plot URL (or plot_id) for the client to connect to
+        plot_id = plan_response.get("plot_id", f"demo-{uuid.uuid4()}")
+        plot_url = f"/davidia/plot/{{uuid}}/{plot_id}"
+        await websocket.send_json(
+            {
+                "status": "ready",
+                "plot_id": plot_id,
+                "plot_url": plot_url,
+                "msg": "Connect to this WebSocket for data streaming.",
+            }
+        )
+    except Exception as e:
+        await websocket.send_json({"status": "error", "msg": str(e)})
+    finally:
+        await websocket.close()
 
 
 def run_server():

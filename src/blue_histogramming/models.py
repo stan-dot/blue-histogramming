@@ -47,12 +47,20 @@ class SessionData(BaseModel):
     metadata: dict = {}
 
 
+class RedisSettings(BaseSettings):
+    host: str = "dragonfly"
+    port: int = 6379
+
+
+class RMQSettings(BaseSettings):
+    host: str = "rmq"
+    port: int = 61613
+
+
 class Settings(BaseSettings):
     allowed_hdf_path: Path = Path("/workspaces/blue-histogramming/data")
-    redis_host: str = "dragonfly"
-    redis_port: int = 6379
-    rmq_host: str = "rmq"
-    rmq_port: int = 61613
-    model_config = SettingsConfigDict(env_file=".env")
+    redis: RedisSettings = RedisSettings()
+    rmq: RMQSettings = RMQSettings()
     channel: str = "topic/public.worker.event"
-    session_timeout_seconds: int = 900  # 15 minutes
+    session_timeout_seconds: int = 900
+    model_config = SettingsConfigDict(env_file=".env")

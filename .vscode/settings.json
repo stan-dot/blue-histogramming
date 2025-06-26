@@ -9,4 +9,18 @@
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",
     },
+    "vim.insertModeKeyBindings": [
+        {
+            "before": [
+                "<tab>"
+            ],
+            "commands": [
+                "tab"
+            ]
+        }
+    ],
+    "vim.useCtrlKeys": true,
+    "vim.handleKeys": {
+        "<tab>": false,
+    }
 }

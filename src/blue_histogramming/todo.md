@@ -11,13 +11,17 @@
 - [x] get the new metadata for fake stream correct
 - [x] add just 1 state handling - no longer direct REDIS calls from rest handlers
 - [x] split into rounting by feature - davidia separately from the filesystem stuff
-- [ ] edit main and session state amnager side by side, add the redis handling per each endpoint 
-- [ ] add blueapi httpx client for interprocess communication - might be better than requests, and need auth and will persist as dependency
-- [ ] add nested settings objects really
-- [ ] make state manager just one - no need for global state like that raw
+- [x] edit main and session state amnager side by side, add the redis handling per each endpoint 
+- [x] add blueapi httpx client for interprocess communication - might be better than requests, and need auth and will persist as dependency
+- [x] add nested settings objects really
+- [x] make state manager just one - no need for global state like that raw
 - [ ] add 'start demo session' endpoint
 - [ ] need just 1 ws endpoint
 - [ ] how to push and get back data from davidia? is the server holding just 1 image?
 - [ ] should I send back to the UI the davidia plotting url? or just push the data and it would stream the right data?
 - [ ] make internal davidia client to push the data to it - the plot id is part of the message, but the uuid is unique
-- [ ] make an html based stream for testing maybe?
+
+
+
+## nt doing
+- [ ] make an html based stream for testing maybe? - no, rather 

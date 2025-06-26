@@ -1,18 +1,67 @@
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
 import h5py
+import httpx
 import numpy as np
-from davidia.models.messages import ImageData, ImageDataMessage, MsgType, PlotMessage
-from fastapi import APIRouter, Cookie, Depends, HTTPException
+from davidia.models.messages import (
+    ImageData,
+    ImageDataMessage,
+    MsgType,
+    PlotMessage,
+)
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, WebSocket
 
+from blue_histogramming.main import get_session_manager
 from blue_histogramming.models import Settings
+from blue_histogramming.proxy import get_davidia_client
 from blue_histogramming.session_state_manager import SessionStateManager
 from blue_histogramming.utils import (
     calculate_fractions,
     list_hdf5_tree_of_file,
     process_image_direct,
 )
+
+
+def encode_ndarray(obj) -> dict[str, Any]:
+    if isinstance(obj, np.ndarray):
+        kind = obj.dtype.kind
+        if kind == "i":  # reduce integer array byte size if possible
+            vmin = obj.min() if obj.size > 0 else 0
+            if vmin >= 0:
+                kind = "u"
+            else:
+                vmax = obj.max() if obj.size > 0 else 0
+                minmax_type = [np.min_scalar_type(vmin), np.min_scalar_type(vmax)]
+                if minmax_type[1].kind == "u":
+                    isize = minmax_type[1].itemsize
+                    stype = np.dtype(f"i{isize}")
+                    if isize == 8 and vmax > np.iinfo(stype).max:
+                        minmax_type[1] = np.dtype(np.float64)
+                    else:
+                        minmax_type[1] = stype
+                obj = obj.astype(np.promote_types(*minmax_type))
+        if kind == "u":
+            obj = obj.astype(np.min_scalar_type(obj.max() if obj.size > 0 else 0))
+        obj = {
+            "nd": True,
+            "dtype": obj.dtype.str,
+            "shape": obj.shape,
+            "data": obj.data.tobytes(),
+        }
+    return obj
+
+
+def ws_pack(obj) -> bytes | None:
+    """Pack object for a websocket message
+
+    Packs object by converting Pydantic models and ndarrays to dicts before
+    using MessagePack
+    """
+    if isinstance(obj, BaseModel):
+        obj = obj.model_dump(by_alias=True)
+    return _mp_packb(obj, use_bin_type=True, default=encode_ndarray)
+
 
 router = APIRouter()
 
@@ -87,6 +136,7 @@ async def get_dataset(
     group_name: str,
     dataset_name: str,
     latest_n_images: int = 10,
+    client: httpx.AsyncClient = Depends(get_davidia_client),  # noqa: B008
     session_id: str | None = Cookie(default=None),
 ):
     file_path = os.path.join(settings.allowed_hdf_path, id)
@@ -96,13 +146,19 @@ async def get_dataset(
     with h5py.File(file_path, "r") as f:
         dset = guard_dataset_and_group(id, group_name, dataset_name, f)
         raw_data = dset[-latest_n_images:]
-        # Vectorized processing
         stats_list = process_image_direct(raw_data)
         fractions_list = calculate_fractions(stats_list)
         final_list: list[ImageDataMessage] = [
             ImageDataMessage(im_data=a) for a in fractions_list
         ]
-        return final_list
+
+        # Msgpack encode the messages
+        encoded = ws_pack([msg.model_dump() for msg in final_list])
+
+        # Send to the davidia endpoint (example: /push_data)
+        response = await client.post("/push_data", content=encoded)
+        response.raise_for_status()
+        return response.json()
 
     raise HTTPException(status_code=404, detail="Dataset not present")
 
@@ -121,3 +177,18 @@ async def get_dataset_shape(
         dset = guard_dataset_and_group(id, group_name, dataset_name, f)
         shape = dset.shape
     return {"shape": shape}
+
+
+@router.websocket("/ws/{client_id}/dataset/{dataset_name}")
+async def stream_dataset(
+    session_manager: Annotated[SessionStateManager, Depends(get_session_manager)],
+    client_id: str,
+    websocket: WebSocket,
+    dataset_name: str,
+):
+    # Example: accept the websocket and start observer
+    await websocket.accept()
+    # You can now use session_manager, e.g.:
+    # session_manager.start_observer_for_session(session_id, folder, websocket)
+    # ...rest of your logic...
+    pass

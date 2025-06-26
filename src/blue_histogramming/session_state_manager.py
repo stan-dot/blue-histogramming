@@ -32,11 +32,12 @@ class SessionStateManager:
     state: RunState
     connection: stomp.Connection | None = None
     settings: Settings
+    session_id: str
 
     def __init__(self, session_id: str, redis_client: Redis, settings: Settings):
+        self.session_id = session_id
         self.redis = redis_client
         self.settings = settings
-        # todo change this
         self.memory_state = {}
         self.connection = self._start_stomp_listener(session_id, settings, redis_client)
         self.state = RunState(
@@ -66,20 +67,20 @@ class SessionStateManager:
         conn.subscribe(destination=topic, id=1, ack="auto")
         return conn
 
-    def set_numpy_state(self, session_id, numpy_data):
-        self.memory_state[session_id] = numpy_data
+    def set_numpy_state(self, numpy_data):
+        self.memory_state[self.session_id] = numpy_data
 
-    def get_numpy_state(self, session_id):
-        return self.memory_state.get(session_id)
+    def get_numpy_state(self):
+        return self.memory_state.get(self.session_id)
 
-    def set_metadata(self, session_id, metadata: dict):
-        self.redis.set(f"session:{session_id}:metadata", json.dumps(metadata))
+    def set_metadata(self, metadata: dict):
+        self.redis.set(f"session:{self.session_id}:metadata", json.dumps(metadata))
 
-    def get_metadata(self, session_id):
-        data = self.redis.get(f"session:{session_id}:metadata")
+    def get_metadata(self):
+        data = self.redis.get(f"session:{self.session_id}:metadata")
         return json.loads(data) if data else {}
 
-    def start_observer_for_session(self, session_id: str, folder: str, websocket=None):
+    def start_observer_for_session(self, folder: str, websocket=None):
         """Start a watchdog observer for this session and folder, optionally notifying a websocket."""
         loop = asyncio.get_event_loop()
         if websocket:
@@ -90,15 +91,15 @@ class SessionStateManager:
         observer.schedule(handler, folder, recursive=False)
         observer.start()
         # Store observer, handler, and websocket in memory state
-        self.memory_state[session_id] = self.memory_state.get(session_id, {})
-        self.memory_state[session_id]["observer"] = observer
-        self.memory_state[session_id]["handler"] = handler
+        self.memory_state[self.session_id] = self.memory_state.get(self.session_id, {})
+        self.memory_state[self.session_id]["observer"] = observer
+        self.memory_state[self.session_id]["handler"] = handler
         if websocket:
-            self.memory_state[session_id]["websocket"] = websocket
+            self.memory_state[self.session_id]["websocket"] = websocket
 
-    def stop_observer_for_session(self, session_id: str):
+    def stop_observer_for_session(self):
         """Stop and remove the observer for this session."""
-        session = self.memory_state.get(session_id)
+        session = self.memory_state.get(self.session_id)
         if session and "observer" in session:
             observer = session["observer"]
             observer.stop()
@@ -106,38 +107,40 @@ class SessionStateManager:
             del session["observer"]
             del session["handler"]
 
-    def clear_session(self, session_id):
-        self.stop_observer_for_session(session_id)
-        self.memory_state.pop(session_id, None)
-        self.redis.delete(f"session:{session_id}:metadata")
+    def clear_session(self):
+        self.stop_observer_for_session()
+        self.memory_state.pop(self.session_id, None)
+        self.redis.delete(f"session:{self.session_id}:metadata")
 
-    def set_dataset(self, session_id: str, dataset_name: str):
+    def set_dataset(self, dataset_name: str):
         # set this session dataset and path
-        self.redis.hset(f"session:{session_id}", mapping={"status": "active"})
-        self.redis.set(f"session:{session_id}:dataset", dataset_name)
+        self.redis.hset(f"session:{self.session_id}", mapping={"status": "active"})
+        self.redis.set(f"session:{self.session_id}:dataset", dataset_name)
 
-    def get_session_data(self, session_id: str) -> dict:
+    def get_session_data(self) -> dict:
         """Get all session data as a dict (decoding bytes to str)."""
-        data = self.redis.hgetall(f"session:{session_id}")
+        data = self.redis.hgetall(f"session:{self.session_id}")
         if not data:
             return {}
         return {k.decode(): v.decode() for k, v in data.items()}
 
-    def set_session_data(self, session_id: str, mapping: dict):
+    def set_session_data(self, mapping: dict):
         """Set multiple session fields at once."""
-        self.redis.hset(f"session:{session_id}", mapping=mapping)
+        self.redis.hset(f"session:{self.session_id}", mapping=mapping)
 
-    def new_session(self, session_id: str, metadata: RunMetadata):
+    def new_session(self, metadata: RunMetadata):
         """Initialize a new session with metadata."""
         self.metadata = metadata
-        self.set_metadata(session_id, metadata.dict())
+        self.set_metadata(metadata.dict())
         self.set_session_data(
-            session_id, {"status": "active", "created_at": str(metadata.start.time)}
+            {"status": "active", "created_at": str(metadata.start.time)}
         )
-        self.redis.expire(f"session:{session_id}", settings.session_timeout_seconds)
+        self.redis.expire(
+            f"session:{self.session_id}", self.settings.session_timeout_seconds
+        )
         self.state = RunState(
             dataset=None,
             big_matrix=np.zeros((100, 100, 2), dtype=np.float32),
             descriptors=[],
         )
-        self.memory_state[session_id] = {"state": self.state}
+        self.memory_state[self.session_id] = {"state": self.state}
